@@ -1,0 +1,154 @@
+---
+name: Publish Container Image
+on:
+  push:
+    tags:
+      - "v[0-9]*"
+      - "v[0-9]*.[0-9]*"
+      - "v[0-9]*.[0-9]*.[0-9]*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to be published (e.g., v2.0.1)"
+        required: true
+        type: string
+        default: "latest"
+
+env:
+  IMAGE_NAME: babylon-runner
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.image_tags.outputs.VERSION }}
+      image_base: ${{ steps.image_tags.outputs.IMAGE_BASE }}
+      image_tags: ${{ steps.image_tags.outputs.IMAGE_TAGS }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Get image tags
+        id: image_tags
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          IMAGE_BASE="${{ vars.IMAGE_REGISTRY }}/${{ vars.IMAGE_REPOSITORY }}/${{ env.IMAGE_NAME }}"
+
+          if [[ -n "${INPUT_VERSION}" ]]; then
+            VERSION="${INPUT_VERSION}"
+            IMAGE_TAGS=(
+              "${IMAGE_BASE}:${VERSION}"
+            )
+          else
+            VERSION=${GITHUB_REF#refs/tags/}
+            IMAGE_TAGS=(
+              "${IMAGE_BASE}:latest"
+              "${IMAGE_BASE}:${VERSION%.*}"
+              "${IMAGE_BASE}:${VERSION}"
+            )
+          fi
+
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "IMAGE_BASE=${IMAGE_BASE}" >> $GITHUB_OUTPUT
+          ( IFS=$','; echo "IMAGE_TAGS=${IMAGE_TAGS[*]}" >> $GITHUB_OUTPUT )
+
+      - name: Verify Chart version
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          VERSION="${{ steps.image_tags.outputs.VERSION }}"
+          HELM_CHART_VERSION=$(sed -nr 's/^appVersion: "?(.*)"?/\1/p' helm/Chart.yaml)
+          if [[ "v${HELM_CHART_VERSION}" != "${VERSION}" ]]; then
+            echo "Helm chart appVersion (${HELM_CHART_VERSION}) does not match tag version (${VERSION})!"
+            exit 1
+          fi
+
+  build-amd64:
+    needs: prepare
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Login to Image Registry
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
+        with:
+          registry: ${{ vars.IMAGE_REGISTRY }}/${{ vars.IMAGE_REPOSITORY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ needs.prepare.outputs.image_base }}:buildcache-linux-amd64
+          cache-from: type=gha,scope=babylon-runner-linux-amd64
+          cache-to: type=gha,mode=max,scope=babylon-runner-linux-amd64
+
+  build-arm64:
+    needs: prepare
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Login to Image Registry
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
+        with:
+          registry: ${{ vars.IMAGE_REGISTRY }}/${{ vars.IMAGE_REPOSITORY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          platforms: linux/arm64
+          tags: ${{ needs.prepare.outputs.image_base }}:buildcache-linux-arm64
+          cache-from: type=gha,scope=babylon-runner-linux-arm64
+          cache-to: type=gha,mode=max,scope=babylon-runner-linux-arm64
+
+  manifest:
+    needs: [prepare, build-amd64, build-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Login to Image Registry
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
+        with:
+          registry: ${{ vars.IMAGE_REGISTRY }}/${{ vars.IMAGE_REPOSITORY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Create and push multi-arch manifest
+        run: |
+          IMAGE_BASE="${{ needs.prepare.outputs.image_base }}"
+
+          SOURCE_IMAGES=(
+            "${IMAGE_BASE}@${{ needs.build-amd64.outputs.digest }}"
+            "${IMAGE_BASE}@${{ needs.build-arm64.outputs.digest }}"
+          )
+
+          IFS=',' read -ra TAGS <<< "${{ needs.prepare.outputs.image_tags }}"
+          for TAG in "${TAGS[@]}"; do
+            docker buildx imagetools create -t "${TAG}" "${SOURCE_IMAGES[@]}"
+          done
