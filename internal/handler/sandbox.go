@@ -7,11 +7,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/rhpds/anarchy/babylon-runner/internal/clients"
-	"github.com/rhpds/anarchy/babylon-runner/internal/httputil"
-	"github.com/rhpds/anarchy/babylon-runner/internal/runner"
-	"github.com/rhpds/anarchy/babylon-runner/internal/template"
-	"github.com/rhpds/anarchy/babylon-runner/internal/types"
+	"github.com/rhpds/babylon-runner/internal/clients"
+	"github.com/rhpds/babylon-runner/internal/httputil"
+	"github.com/rhpds/babylon-runner/internal/runner"
+	"github.com/rhpds/babylon-runner/internal/template"
+	"github.com/rhpds/babylon-runner/internal/types"
 )
 
 // SandboxResult holds the result of a sandbox API get or book operation.

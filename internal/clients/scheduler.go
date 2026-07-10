@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/rhpds/anarchy/babylon-runner/internal/httputil"
-	"github.com/rhpds/anarchy/babylon-runner/internal/metrics"
-	"github.com/rhpds/anarchy/babylon-runner/internal/types"
+	"github.com/rhpds/babylon-runner/internal/httputil"
+	"github.com/rhpds/babylon-runner/internal/metrics"
+	"github.com/rhpds/babylon-runner/internal/types"
 )
 
 // Candidate represents a controller hostname eligible for job scheduling.

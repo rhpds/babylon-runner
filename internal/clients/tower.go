@@ -16,8 +16,8 @@ import (
 
 	"log/slog"
 
-	"github.com/rhpds/anarchy/babylon-runner/internal/httputil"
-	"github.com/rhpds/anarchy/babylon-runner/internal/metrics"
+	"github.com/rhpds/babylon-runner/internal/httputil"
+	"github.com/rhpds/babylon-runner/internal/metrics"
 )
 
 const vaultVarChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"

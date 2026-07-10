@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/rhpds/anarchy/babylon-runner/internal/types"
+	"github.com/rhpds/babylon-runner/internal/types"
 )
 
 // --- handleEventCreate tests ---

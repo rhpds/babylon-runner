@@ -3,8 +3,8 @@ package handler
 import (
 	"log/slog"
 
-	"github.com/rhpds/anarchy/babylon-runner/internal/runner"
-	"github.com/rhpds/anarchy/babylon-runner/internal/types"
+	"github.com/rhpds/babylon-runner/internal/runner"
+	"github.com/rhpds/babylon-runner/internal/types"
 )
 
 // handleStop routes a stop action based on the current state.

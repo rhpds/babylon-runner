@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"regexp"
 
-	"github.com/rhpds/anarchy/babylon-runner/internal/clients"
-	"github.com/rhpds/anarchy/babylon-runner/internal/runner"
-	"github.com/rhpds/anarchy/babylon-runner/internal/types"
+	"github.com/rhpds/babylon-runner/internal/clients"
+	"github.com/rhpds/babylon-runner/internal/runner"
+	"github.com/rhpds/babylon-runner/internal/types"
 )
 
 // Default deployer entry points from babylon governor defaults/main.yaml.

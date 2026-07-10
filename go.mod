@@ -1,4 +1,4 @@
-module github.com/rhpds/anarchy/babylon-runner
+module github.com/rhpds/babylon-runner
 
 go 1.26.0
 

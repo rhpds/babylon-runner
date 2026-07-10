@@ -3,7 +3,7 @@ package handler
 import (
 	"testing"
 
-	"github.com/rhpds/anarchy/babylon-runner/internal/types"
+	"github.com/rhpds/babylon-runner/internal/types"
 )
 
 // TestHandleStartDeployerDisabled tests start when deployer is disabled

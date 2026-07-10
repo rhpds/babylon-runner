@@ -5,8 +5,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/rhpds/anarchy/babylon-runner/internal/runner"
-	"github.com/rhpds/anarchy/babylon-runner/internal/types"
+	"github.com/rhpds/babylon-runner/internal/runner"
+	"github.com/rhpds/babylon-runner/internal/types"
 )
 
 // handleEventCreate handles the "create" subject event. It initializes a

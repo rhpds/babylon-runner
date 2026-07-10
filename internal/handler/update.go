@@ -3,7 +3,7 @@ package handler
 import (
 	"log/slog"
 
-	"github.com/rhpds/anarchy/babylon-runner/internal/runner"
+	"github.com/rhpds/babylon-runner/internal/runner"
 )
 
 // handleUpdate routes an update action based on the current state.

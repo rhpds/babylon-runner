@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/rhpds/anarchy/babylon-runner/internal/httputil"
-	"github.com/rhpds/anarchy/babylon-runner/internal/types"
+	"github.com/rhpds/babylon-runner/internal/httputil"
+	"github.com/rhpds/babylon-runner/internal/types"
 )
 
 // AnarchyClientConfig holds configuration for creating an AnarchyClient.

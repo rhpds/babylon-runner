@@ -3,7 +3,7 @@ package handler
 import (
 	"log/slog"
 
-	"github.com/rhpds/anarchy/babylon-runner/internal/runner"
+	"github.com/rhpds/babylon-runner/internal/runner"
 )
 
 // Register returns the handler map for all supported run types.

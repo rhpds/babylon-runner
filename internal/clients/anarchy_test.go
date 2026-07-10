@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhpds/anarchy/babylon-runner/internal/types"
+	"github.com/rhpds/babylon-runner/internal/types"
 )
 
 func TestAnarchyClientSubjectUpdate(t *testing.T) {
