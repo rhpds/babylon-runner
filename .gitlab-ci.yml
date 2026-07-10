@@ -1,0 +1,28 @@
+---
+include:
+  - project: enterprise-pipelines/gitlab-ci/includes
+    file: SAST/sonarqube.yml
+
+stages:
+  - test
+  - static-analysis
+
+test:
+  stage: test
+  image: golang:1.26
+  script:
+    - go test ./... -v -count=1 -coverprofile=coverage.out
+  artifacts:
+    paths:
+      - coverage.out
+    expire_in: 1 hour
+  tags:
+    - itup-alm-x86
+
+sonarqube:
+  variables:
+    SONAR_PROJECT_KEY: "com.redhat.rhpds.babylon-runner"
+  needs:
+    - test
+  tags:
+    - itup-alm-x86
