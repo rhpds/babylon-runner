@@ -33,6 +33,73 @@ func handleProvision(rc *runner.RunContext) error {
 	}
 }
 
+// transitionToQueued updates the subject state to provision-queued and schedules
+// a follow-up poll after 30 seconds.
+func transitionToQueued(rc *runner.RunContext) error {
+	if err := rc.SubjectUpdate(types.SubjectPatch{
+		Patch: types.PatchBody{
+			Metadata: &types.PatchMetadata{
+				Labels: map[string]string{"state": stateQueued},
+			},
+			Spec: &types.PatchSpec{
+				Vars: map[string]interface{}{
+					"current_state": stateQueued,
+				},
+			},
+			Status: map[string]interface{}{
+				"sandboxAPIJobs": map[string]interface{}{
+					"provision": map[string]interface{}{
+						"placementStatus":    "queued",
+						"lastCheckTimestamp": types.NowUTC(),
+					},
+				},
+			},
+			SkipUpdateProcessing: true,
+		},
+	}); err != nil {
+		return err
+	}
+	rc.ContinueAction("30s")
+	return nil
+}
+
+// completeProvisionNoDeployer marks a provision as started when the deployer is
+// disabled. It records sandbox-provided provision_data if available.
+func completeProvisionNoDeployer(rc *runner.RunContext, sandboxResult *SandboxResult) error {
+	ts := types.NowUTC()
+	specVars := map[string]interface{}{
+		"current_state": "started",
+		"healthy":       true,
+	}
+	if sandboxResult != nil && len(sandboxResult.SubjectVars) > 0 {
+		specVars["provision_data"] = sandboxResult.SubjectVars
+	}
+	if err := rc.SubjectUpdate(types.SubjectPatch{
+		Patch: types.PatchBody{
+			Metadata: &types.PatchMetadata{
+				Labels: map[string]string{
+					"state": "started",
+				},
+			},
+			Spec: &types.PatchSpec{
+				Vars: specVars,
+			},
+			Status: map[string]interface{}{
+				"actions": map[string]interface{}{
+					"provision": map[string]interface{}{
+						"completeTimestamp": ts,
+						"state":            "successful",
+					},
+				},
+			},
+		},
+	}); err != nil {
+		return err
+	}
+	rc.FinishAction("successful")
+	return nil
+}
+
 // runProvision initiates the provisioning workflow.
 func runProvision(rc *runner.RunContext) error {
 	// Set startTimestamp if not already set.
@@ -68,32 +135,7 @@ func runProvision(rc *runner.RunContext) error {
 		case "error":
 			return handleProvisionError(rc)
 		case "queued":
-			// Update state to provision-queued and poll.
-			if err := rc.SubjectUpdate(types.SubjectPatch{
-				Patch: types.PatchBody{
-					Metadata: &types.PatchMetadata{
-						Labels: map[string]string{"state": stateQueued},
-					},
-					Spec: &types.PatchSpec{
-						Vars: map[string]interface{}{
-							"current_state": stateQueued,
-						},
-					},
-					Status: map[string]interface{}{
-						"sandboxAPIJobs": map[string]interface{}{
-							"provision": map[string]interface{}{
-								"placementStatus":    "queued",
-								"lastCheckTimestamp": types.NowUTC(),
-							},
-						},
-					},
-					SkipUpdateProcessing: true,
-				},
-			}); err != nil {
-				return err
-			}
-			rc.ContinueAction("30s")
-			return nil
+			return transitionToQueued(rc)
 		}
 	}
 
@@ -113,38 +155,7 @@ func runProvision(rc *runner.RunContext) error {
 
 	// Deployer disabled and sandbox API in use: mark as started immediately.
 	if rc.SandboxAPIInUse() {
-		ts := types.NowUTC()
-		specVars := map[string]interface{}{
-			"current_state": "started",
-			"healthy":       true,
-		}
-		// Set provision_data from sandbox vars (matching Ansible).
-		if sandboxResult != nil && len(sandboxResult.SubjectVars) > 0 {
-			specVars["provision_data"] = sandboxResult.SubjectVars
-		}
-		if err := rc.SubjectUpdate(types.SubjectPatch{
-			Patch: types.PatchBody{
-				Metadata: &types.PatchMetadata{
-					Labels: map[string]string{
-						"state": "started",
-					},
-				},
-				Spec: &types.PatchSpec{
-					Vars: specVars,
-				},
-				Status: map[string]interface{}{
-					"actions": map[string]interface{}{
-						"provision": map[string]interface{}{
-							"completeTimestamp": ts,
-							"state":            "successful",
-						},
-					},
-				},
-			},
-		}); err != nil {
-			return err
-		}
-		rc.FinishAction("successful")
+		return completeProvisionNoDeployer(rc, sandboxResult)
 	}
 
 	return nil

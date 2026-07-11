@@ -8,69 +8,108 @@ import (
 	"github.com/rhpds/babylon-runner/internal/types"
 )
 
+// determineUpdateAction decides which action (update/start/stop) to take
+// based on job_vars changes and state transitions. Returns "" if no action
+// is needed.
+func determineUpdateAction(currentJobVars, previousJobVars map[string]interface{}, currentState, desiredState string) string {
+	if !reflect.DeepEqual(currentJobVars, previousJobVars) {
+		return "update"
+	}
+	if desiredState == "started" && currentState == "stopped" {
+		return "start"
+	}
+	if desiredState == "stopped" && currentState == "started" {
+		return "stop"
+	}
+	return ""
+}
+
+// shouldScheduleStatus returns true if a status check should be scheduled.
+// Two paths (matching Ansible):
+//  1. Legacy: check_status_state set to "pending" directly (no timestamp).
+//  2. Timestamp: new request_timestamp differs from last, and state is empty or "successful".
+func shouldScheduleStatus(checkStatusState, currentTimestamp, previousTimestamp string) bool {
+	if checkStatusState == "pending" && currentTimestamp == "" {
+		return true
+	}
+	if currentTimestamp != "" && currentTimestamp != previousTimestamp &&
+		(checkStatusState == "" || checkStatusState == "successful") {
+		return true
+	}
+	return false
+}
+
+// scheduleUpdateAction patches the subject state and schedules the given action.
+func scheduleUpdateAction(rc *runner.RunContext, action string) error {
+	pendingState := action + "-pending"
+	if err := rc.SubjectUpdate(types.SubjectPatch{
+		Patch: types.PatchBody{
+			Metadata: &types.PatchMetadata{
+				Labels: map[string]string{
+					"state": pendingState,
+				},
+			},
+			Spec: &types.PatchSpec{
+				Vars: map[string]interface{}{
+					"current_state": pendingState,
+				},
+			},
+			SkipUpdateProcessing: true,
+		},
+	}); err != nil {
+		return err
+	}
+
+	slog.Info("scheduling action from update event", "action", action, "subject", rc.SubjectName())
+	return rc.ScheduleAction(types.ScheduleActionRequest{
+		Action: action,
+		Cancel: []string{"start", "stop"},
+	})
+}
+
+// scheduleStatusCheck patches check_status_state and schedules the status action.
+func scheduleStatusCheck(rc *runner.RunContext) error {
+	if err := rc.SubjectUpdate(types.SubjectPatch{
+		Patch: types.PatchBody{
+			Spec: &types.PatchSpec{
+				Vars: map[string]interface{}{
+					"check_status_state": "pending",
+				},
+			},
+			SkipUpdateProcessing: true,
+		},
+	}); err != nil {
+		return err
+	}
+
+	return rc.ScheduleAction(types.ScheduleActionRequest{
+		Action: "status",
+	})
+}
+
 // handleEventUpdate handles the "update" subject event. It determines
 // whether an action (update/start/stop) is needed based on state and
 // job_vars changes, and checks for status requests.
 func handleEventUpdate(rc *runner.RunContext) error {
 	slog.Info("handling update event", "subject", rc.SubjectName(), "currentState", rc.CurrentState(), "desiredState", rc.DesiredState())
 
-	currentState := rc.CurrentState()
-	desiredState := rc.DesiredState()
-
 	currentJobVars := rc.JobVars()
 	if currentJobVars == nil {
 		currentJobVars = make(map[string]interface{})
 	}
 
-	// Previous job_vars come from subject.status.previous_state.job_vars.
-	// Fall back to current job_vars if not present.
 	previousJobVars := types.GetNestedMap(rc.Payload.Subject.Status.PreviousState, "job_vars")
 	if previousJobVars == nil {
 		previousJobVars = currentJobVars
 	}
 
-	// Determine which action to take.
-	var action string
-	if !reflect.DeepEqual(currentJobVars, previousJobVars) {
-		action = "update"
-	} else if desiredState == "started" && currentState == "stopped" {
-		action = "start"
-	} else if desiredState == "stopped" && currentState == "started" {
-		action = "stop"
-	}
+	action := determineUpdateAction(currentJobVars, previousJobVars, rc.CurrentState(), rc.DesiredState())
 
-	// If an action is determined and it exists in the governor actions,
-	// schedule it.
+	// If an action is determined and it exists in the governor actions, schedule it.
 	if action != "" {
-		govActions := rc.GovernorActions()
-		if govActions != nil {
+		if govActions := rc.GovernorActions(); govActions != nil {
 			if _, ok := govActions[action]; ok {
-				pendingState := action + "-pending"
-				err := rc.SubjectUpdate(types.SubjectPatch{
-					Patch: types.PatchBody{
-						Metadata: &types.PatchMetadata{
-							Labels: map[string]string{
-								"state": pendingState,
-							},
-						},
-						Spec: &types.PatchSpec{
-							Vars: map[string]interface{}{
-								"current_state": pendingState,
-							},
-						},
-						SkipUpdateProcessing: true,
-					},
-				})
-				if err != nil {
-					return err
-				}
-
-				slog.Info("scheduling action from update event", "action", action, "subject", rc.SubjectName())
-				err = rc.ScheduleAction(types.ScheduleActionRequest{
-					Action: action,
-					Cancel: []string{"start", "stop"},
-				})
-				if err != nil {
+				if err := scheduleUpdateAction(rc, action); err != nil {
 					return err
 				}
 			}
@@ -87,47 +126,17 @@ func handleEventUpdate(rc *runner.RunContext) error {
 	}
 
 	previousState := rc.Payload.Subject.Status.PreviousState
-
-	checkStatusState := rc.CheckStatusState()
-	currentTimestamp := rc.Payload.Subject.Spec.Vars.GetString("check_status_request_timestamp")
 	previousTimestamp := ""
 	if previousState != nil {
 		previousTimestamp, _ = previousState["check_status_request_timestamp"].(string)
 	}
 
-	// Two paths to schedule status (matching Ansible):
-	// 1. Legacy: check_status_state set to "pending" directly (no timestamp).
-	// 2. Timestamp: new request_timestamp differs from last, and state is empty or "successful".
-	scheduleStatus := false
-	if checkStatusState == "pending" && currentTimestamp == "" {
-		// Legacy path.
-		scheduleStatus = true
-	} else if currentTimestamp != "" && currentTimestamp != previousTimestamp &&
-		(checkStatusState == "" || checkStatusState == "successful") {
-		scheduleStatus = true
-	}
-
-	if scheduleStatus {
-		err := rc.SubjectUpdate(types.SubjectPatch{
-			Patch: types.PatchBody{
-				Spec: &types.PatchSpec{
-					Vars: map[string]interface{}{
-						"check_status_state": "pending",
-					},
-				},
-				SkipUpdateProcessing: true,
-			},
-		})
-		if err != nil {
-			return err
-		}
-
-		err = rc.ScheduleAction(types.ScheduleActionRequest{
-			Action: "status",
-		})
-		if err != nil {
-			return err
-		}
+	if shouldScheduleStatus(
+		rc.CheckStatusState(),
+		rc.Payload.Subject.Spec.Vars.GetString("check_status_request_timestamp"),
+		previousTimestamp,
+	) {
+		return scheduleStatusCheck(rc)
 	}
 
 	return nil

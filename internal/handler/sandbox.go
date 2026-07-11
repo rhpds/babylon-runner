@@ -550,6 +550,39 @@ func extractIBMSandboxVars(res map[string]interface{}, creds bool) map[string]in
 	return toMerge
 }
 
+// resolveVarName returns the target variable name for a sandbox resource,
+// taken from the "var" annotation. Defaults to "main" if not set.
+func resolveVarName(res map[string]interface{}) string {
+	if annotations, ok := res["annotations"].(map[string]interface{}); ok {
+		if v, ok := annotations["var"].(string); ok && v != "" {
+			return v
+		}
+	}
+	return "main"
+}
+
+// extractResourceVars dispatches to the appropriate per-kind extractor
+// for a single sandbox resource.
+func extractResourceVars(res map[string]interface{}, creds bool) map[string]interface{} {
+	kind := getStringDefault(res, "kind", "none")
+	switch kind {
+	case "AwsSandbox":
+		return extractAwsSandboxVars(res, creds)
+	case "OcpSandbox":
+		return extractOcpSandboxVars(res, creds)
+	case "IBMResourceGroupSandbox":
+		return extractIBMSandboxVars(res, creds)
+	default:
+		toMerge := make(map[string]interface{})
+		if creds {
+			if rawCreds, _ := res["credentials"].([]interface{}); rawCreds != nil {
+				toMerge["credentials"] = rawCreds
+			}
+		}
+		return toMerge
+	}
+}
+
 // extractSandboxVars extracts dynamic job variables from a placement
 // response, matching the Python extract_sandboxes_vars filter.
 // When creds is true, credential data is included (for Tower extra_vars).
@@ -568,34 +601,8 @@ func extractSandboxVars(placement map[string]interface{}, creds bool) map[string
 			continue
 		}
 
-		kind := getStringDefault(res, "kind", "none")
-
-		var toMerge map[string]interface{}
-		switch kind {
-		case "AwsSandbox":
-			toMerge = extractAwsSandboxVars(res, creds)
-		case "OcpSandbox":
-			toMerge = extractOcpSandboxVars(res, creds)
-		case "IBMResourceGroupSandbox":
-			toMerge = extractIBMSandboxVars(res, creds)
-		default:
-			// Any other kind: include raw credentials only.
-			toMerge = make(map[string]interface{})
-			if creds {
-				rawCreds, _ := res["credentials"].([]interface{})
-				if rawCreds != nil {
-					toMerge["credentials"] = rawCreds
-				}
-			}
-		}
-
-		// Determine target var name from annotations.
-		varName := "main"
-		if annotations, ok := res["annotations"].(map[string]interface{}); ok {
-			if v, ok := annotations["var"].(string); ok && v != "" {
-				varName = v
-			}
-		}
+		toMerge := extractResourceVars(res, creds)
+		varName := resolveVarName(res)
 
 		if varName == "main" {
 			types.DeepMergeMap(vars, toMerge)

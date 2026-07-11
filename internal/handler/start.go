@@ -20,6 +20,39 @@ func handleStart(rc *runner.RunContext) error {
 	return nil
 }
 
+// completeStartNoDeployer marks a start action as complete when the deployer is
+// disabled. It sets the subject state to "started" and records the completion
+// timestamp.
+func completeStartNoDeployer(rc *runner.RunContext) error {
+	ts := types.NowUTC()
+	if err := rc.SubjectUpdate(types.SubjectPatch{
+		Patch: types.PatchBody{
+			Metadata: &types.PatchMetadata{
+				Labels: map[string]string{
+					"state": "started",
+				},
+			},
+			Spec: &types.PatchSpec{
+				Vars: map[string]interface{}{
+					"current_state": "started",
+				},
+			},
+			Status: map[string]interface{}{
+				"actions": map[string]interface{}{
+					"start": map[string]interface{}{
+						"completeTimestamp": ts,
+					},
+				},
+			},
+			SkipUpdateProcessing: true,
+		},
+	}); err != nil {
+		return err
+	}
+	rc.FinishAction("successful")
+	return nil
+}
+
 // runStart initiates the start workflow.
 func runStart(rc *runner.RunContext) error {
 	// Set startTimestamp.
@@ -50,33 +83,7 @@ func runStart(rc *runner.RunContext) error {
 		}
 		// If deployer disabled for start: mark started immediately.
 		if rc.DeployerDisabled("start") {
-			ts := types.NowUTC()
-			if err := rc.SubjectUpdate(types.SubjectPatch{
-				Patch: types.PatchBody{
-					Metadata: &types.PatchMetadata{
-						Labels: map[string]string{
-							"state": "started",
-						},
-					},
-					Spec: &types.PatchSpec{
-						Vars: map[string]interface{}{
-							"current_state": "started",
-						},
-					},
-					Status: map[string]interface{}{
-						"actions": map[string]interface{}{
-							"start": map[string]interface{}{
-								"completeTimestamp": ts,
-							},
-						},
-					},
-					SkipUpdateProcessing: true,
-				},
-			}); err != nil {
-				return err
-			}
-			rc.FinishAction("successful")
-			return nil
+			return completeStartNoDeployer(rc)
 		}
 	}
 
