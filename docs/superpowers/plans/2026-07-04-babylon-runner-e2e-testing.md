@@ -36,7 +36,7 @@ export NS=babylon-anarchy-test
 
 **Purpose:** Ensure the cluster is reachable and the namespace has all prerequisites before modifying anything.
 
-- [ ] **Step 1: Verify kubeconfig and namespace**
+- [x] **Step 1: Verify kubeconfig and namespace**
 
 ```bash
 oc get ns $NS
@@ -45,7 +45,7 @@ oc -n $NS get pods
 
 Expected: namespace `babylon-anarchy-test` exists and is Active. Pods running: `anarchy-*` (operator), `anarchy-api-*`, `anarchy-runner-default-*`.
 
-- [ ] **Step 2: Verify CRDs installed**
+- [x] **Step 2: Verify CRDs installed**
 
 ```bash
 oc get crd anarchyrunners.anarchy.gpte.redhat.com -o jsonpath='{.spec.versions[0].name}'
@@ -54,7 +54,7 @@ oc get crd anarchygovernors.anarchy.gpte.redhat.com -o jsonpath='{.spec.versions
 
 Expected: both return `v1`.
 
-- [ ] **Step 3: Verify operator and API are healthy**
+- [x] **Step 3: Verify operator and API are healthy**
 
 ```bash
 oc -n $NS get deployment anarchy -o jsonpath='{.status.readyReplicas}'
@@ -63,7 +63,7 @@ oc -n $NS get deployment anarchy-api -o jsonpath='{.status.readyReplicas}'
 
 Expected: both return `1` (or more).
 
-- [ ] **Step 4: Verify existing runner is functional**
+- [x] **Step 4: Verify existing runner is functional**
 
 ```bash
 oc -n $NS get anarchyrunners
@@ -72,7 +72,7 @@ oc -n $NS get pods -l anarchy.gpte.redhat.com/runner=default
 
 Expected: AnarchyRunner `default` exists. At least one runner pod is Running.
 
-- [ ] **Step 5: Record current state for cleanup**
+- [x] **Step 5: Record current state for cleanup**
 
 ```bash
 oc -n $NS get deployment anarchy -o jsonpath='{.spec.template.spec.containers[0].image}'
@@ -89,7 +89,7 @@ Expected: both show `quay.io/rhpds/anarchy:v0.25.19`. Save this for Task 10 rest
 
 > **Note:** This task runs from `~/Projects/anarchy/`, not from this repo.
 
-- [ ] **Step 1: Verify the ignore-pod-management log line exists in operator**
+- [x] **Step 1: Verify the ignore-pod-management log line exists in operator**
 
 ```bash
 grep -n "ignore.pod.management\|Skipping pod management" ~/Projects/anarchy/operator/anarchyrunner.py
@@ -97,7 +97,7 @@ grep -n "ignore.pod.management\|Skipping pod management" ~/Projects/anarchy/oper
 
 Expected: log line present in `manage_pods()`. If missing, add it and commit (see original plan Task 2 Steps 1-2).
 
-- [ ] **Step 2: Build the operator image from anarchy repo**
+- [x] **Step 2: Build the operator image from anarchy repo**
 
 ```bash
 cd ~/Projects/anarchy
@@ -106,7 +106,7 @@ oc -n $NS start-build anarchy --from-dir=. --wait --follow
 
 Expected: build completes successfully. The BuildConfig `anarchy` already exists and outputs to `istag anarchy:latest`.
 
-- [ ] **Step 3: Verify the new image exists**
+- [x] **Step 3: Verify the new image exists**
 
 ```bash
 oc -n $NS get istag anarchy:latest -o jsonpath='{.image.dockerImageReference}' && echo ""
@@ -114,7 +114,7 @@ oc -n $NS get istag anarchy:latest -o jsonpath='{.image.dockerImageReference}' &
 
 Expected: returns a valid image reference with a new SHA.
 
-- [ ] **Step 4: Update operator deployment to use the new image**
+- [x] **Step 4: Update operator deployment to use the new image**
 
 ```bash
 LOCAL_IMAGE="image-registry.openshift-image-registry.svc:5000/$NS/anarchy:latest"
@@ -124,7 +124,7 @@ oc -n $NS rollout status deployment/anarchy --timeout=120s
 
 Expected: rollout completes, operator pod restarts with new image.
 
-- [ ] **Step 5: Update API deployment to use the new image**
+- [x] **Step 5: Update API deployment to use the new image**
 
 ```bash
 oc -n $NS set image deployment/anarchy-api api="$LOCAL_IMAGE"
@@ -133,7 +133,7 @@ oc -n $NS rollout status deployment/anarchy-api --timeout=120s
 
 Expected: rollout completes, API pod restarts with new image.
 
-- [ ] **Step 6: Verify both deployments are healthy with new image**
+- [x] **Step 6: Verify both deployments are healthy with new image**
 
 ```bash
 oc -n $NS get deployment anarchy -o jsonpath='{.spec.template.spec.containers[0].image}'
@@ -145,7 +145,7 @@ oc -n $NS get pods
 
 Expected: both deployments show the local ImageStream image. All pods are Running and Ready.
 
-- [ ] **Step 7: Verify existing runner still works**
+- [x] **Step 7: Verify existing runner still works**
 
 ```bash
 oc -n $NS get anarchyrunners
@@ -162,7 +162,7 @@ Expected: runner `default` still exists and its pod is Running.
 
 > **Note:** Back to this repo (`~/Projects/babylon-runner/`).
 
-- [ ] **Step 1: Create build resources from template**
+- [x] **Step 1: Create build resources from template**
 
 ```bash
 cd ~/Projects/babylon-runner
@@ -171,7 +171,7 @@ oc -n $NS process -f build-template.yaml --local | oc -n $NS apply -f -
 
 Expected: ImageStream `babylon-runner` and BuildConfig `babylon-runner` created.
 
-- [ ] **Step 2: Build the babylon-runner image**
+- [x] **Step 2: Build the babylon-runner image**
 
 ```bash
 oc -n $NS start-build babylon-runner --from-dir=. --wait --follow
@@ -179,7 +179,7 @@ oc -n $NS start-build babylon-runner --from-dir=. --wait --follow
 
 Expected: multi-stage Go build completes successfully.
 
-- [ ] **Step 3: Verify the image exists**
+- [x] **Step 3: Verify the image exists**
 
 ```bash
 oc -n $NS get istag babylon-runner:latest -o jsonpath='{.image.dockerImageReference}' && echo ""
@@ -206,7 +206,7 @@ cat /tmp/babylon-runner-manifests.yaml
 
 Expected: YAML documents rendered. Review for correctness before applying.
 
-- [ ] **Step 2: Validate the runner label on pods**
+- [x] **Step 2: Validate the runner label on pods**
 
 ```bash
 grep -A1 'runner:' /tmp/babylon-runner-manifests.yaml
@@ -214,7 +214,7 @@ grep -A1 'runner:' /tmp/babylon-runner-manifests.yaml
 
 Expected: `anarchy.gpte.redhat.com/runner: babylon` (NOT `default`).
 
-- [ ] **Step 3: Apply the manifests**
+- [x] **Step 3: Apply the manifests**
 
 ```bash
 oc -n $NS apply -f /tmp/babylon-runner-manifests.yaml
@@ -222,7 +222,7 @@ oc -n $NS apply -f /tmp/babylon-runner-manifests.yaml
 
 Expected: all resources created/configured.
 
-- [ ] **Step 4: Verify resources are up**
+- [x] **Step 4: Verify resources are up**
 
 ```bash
 oc -n $NS get sa,cm,deploy,svc,hpa,servicemonitor,anarchyrunner -l app.kubernetes.io/instance=babylon-runner
@@ -236,7 +236,7 @@ Expected: all resources listed (HPA and ServiceMonitor may be absent if disabled
 
 **Purpose:** Confirm every resource the chart produces exists and has correct configuration.
 
-- [ ] **Step 1: ServiceAccount**
+- [x] **Step 1: ServiceAccount**
 
 ```bash
 oc -n $NS get sa babylon-runner
@@ -244,7 +244,7 @@ oc -n $NS get sa babylon-runner
 
 Expected: ServiceAccount exists.
 
-- [ ] **Step 2: ConfigMap**
+- [x] **Step 2: ConfigMap**
 
 ```bash
 oc -n $NS get cm babylon-runner-env -o yaml
@@ -252,7 +252,7 @@ oc -n $NS get cm babylon-runner-env -o yaml
 
 Expected: ConfigMap exists with keys `RUNNER_NAME: babylon`, `ANARCHY_URL: http://anarchy.babylon-anarchy-test.svc:5000`, `ANARCHY_DOMAIN`, `POLLING_INTERVAL`, etc.
 
-- [ ] **Step 3: Deployment**
+- [x] **Step 3: Deployment**
 
 ```bash
 oc -n $NS get deployment babylon-runner -o wide
@@ -260,7 +260,7 @@ oc -n $NS get deployment babylon-runner -o wide
 
 Expected: Deployment exists. Image is the local ImageStream image.
 
-- [ ] **Step 4: Service**
+- [x] **Step 4: Service**
 
 ```bash
 oc -n $NS get svc babylon-runner-metrics
@@ -268,7 +268,7 @@ oc -n $NS get svc babylon-runner-metrics
 
 Expected: Service exists, port 9093.
 
-- [ ] **Step 5: AnarchyRunner CR**
+- [x] **Step 5: AnarchyRunner CR**
 
 ```bash
 oc -n $NS get anarchyrunner babylon -o yaml
@@ -282,7 +282,7 @@ Expected: AnarchyRunner `babylon` exists with annotation `anarchy.gpte.redhat.co
 
 **Purpose:** Confirm the operator recognizes the AnarchyRunner CR but does NOT create pods for it.
 
-- [ ] **Step 1: Check both runners are visible**
+- [x] **Step 1: Check both runners are visible**
 
 ```bash
 oc -n $NS get anarchyrunners
@@ -290,7 +290,7 @@ oc -n $NS get anarchyrunners
 
 Expected: two runners listed — `default` and `babylon`.
 
-- [ ] **Step 2: Check operator logs for the ignore-pod-management message**
+- [x] **Step 2: Check operator logs for the ignore-pod-management message**
 
 ```bash
 oc -n $NS logs deployment/anarchy --since=2m | grep -i "ignore-pod-management\|Skipping pod management"
@@ -298,7 +298,7 @@ oc -n $NS logs deployment/anarchy --since=2m | grep -i "ignore-pod-management\|S
 
 Expected: log line like `Skipping pod management for runner babylon (ignore-pod-management annotation set)`.
 
-- [ ] **Step 3: Verify operator did NOT create pods for babylon runner**
+- [x] **Step 3: Verify operator did NOT create pods for babylon runner**
 
 The only pods with label `runner=babylon` should be owned by the Deployment (ReplicaSet), not by the AnarchyRunner CR.
 
@@ -308,7 +308,7 @@ oc -n $NS get pods -l anarchy.gpte.redhat.com/runner=babylon -o jsonpath='{range
 
 Expected: all pods show `ReplicaSet` as owner (from our Deployment), NOT `AnarchyRunner`.
 
-- [ ] **Step 4: Verify default runner is unaffected**
+- [x] **Step 4: Verify default runner is unaffected**
 
 ```bash
 oc -n $NS get pods -l anarchy.gpte.redhat.com/runner=default
@@ -322,7 +322,7 @@ Expected: default runner pods still Running, managed by operator as before.
 
 **Purpose:** Confirm the babylon runner pod starts, passes health checks, and authenticates with the Anarchy API.
 
-- [ ] **Step 1: Check pod is Running and Ready**
+- [x] **Step 1: Check pod is Running and Ready**
 
 ```bash
 oc -n $NS get pods -l app.kubernetes.io/name=babylon-runner
@@ -330,7 +330,7 @@ oc -n $NS get pods -l app.kubernetes.io/name=babylon-runner
 
 Expected: at least 1 pod in `Running` state, `READY 1/1`.
 
-- [ ] **Step 2: Check pod logs for successful API connection**
+- [x] **Step 2: Check pod logs for successful API connection**
 
 ```bash
 oc -n $NS logs deployment/babylon-runner --tail=50
@@ -338,7 +338,7 @@ oc -n $NS logs deployment/babylon-runner --tail=50
 
 Expected: logs show the runner starting up, connecting to the API URL, and polling for runs. No errors about authentication (401/403), connection refused, or TLS issues.
 
-- [ ] **Step 3: Verify health endpoints respond**
+- [x] **Step 3: Verify health endpoints respond**
 
 The image is a static Go binary (distroless) — no shell tools available. Use port-forward:
 
@@ -353,7 +353,7 @@ kill %1
 
 Expected: both return a healthy response (200 OK or similar).
 
-- [ ] **Step 4: Verify token auth works**
+- [x] **Step 4: Verify token auth works**
 
 Check the API logs for the babylon runner's polling requests:
 
@@ -365,103 +365,176 @@ Expected: no authentication errors. The runner's polling requests should be acce
 
 ---
 
-### Task 8: Verify — Runner Coexistence (default + babylon)
+### Task 8: Verify — Runner Coexistence and Performance (default + babylon)
 
-**Purpose:** The critical functional test. Create multiple AnarchySubjects via the UI and verify that both runners process runs in parallel.
+**Purpose:** The critical functional test. Create AnarchySubjects, verify both runners process runs in parallel, collect performance metrics from the Go runner, and record evidence.
+
+**What we're measuring:**
+
+- **Functional:** both runners pick up and complete runs without conflicts
+- **Distribution:** how runs split between `default` (Python) and `babylon` (Go)
+- **Performance:** run duration, Tower API latency, polling behavior (Go runner only — the Python runner does not expose Prometheus metrics)
+- **Reliability:** zero errors across all run types
 
 **This task involves manual interaction:** the user creates AnarchySubjects through the Anarchy interface/UI while we observe the results.
 
-- [ ] **Step 1: Record baseline state**
+#### Phase 1: Record Baseline
+
+- [ ] **Step 1: Record baseline run count before creating new subjects**
 
 ```bash
-# Count existing completed runs
-oc -n $NS get anarchyruns -o jsonpath='{range .items[*]}{.metadata.labels.anarchy\.gpte\.redhat\.com/runner}{"\n"}{end}' | sort | uniq -c
+echo "=== Baseline run count per runner ==="
+oc -n $NS get anarchyruns -o jsonpath='{range .items[*]}{.status.runner.name}{"\n"}{end}' | sort | uniq -c | sort -rn
 
-# Check default runner pod run count
-oc -n $NS get anarchyrunner default -o jsonpath='{.status.pods}' | python3 -m json.tool
+echo ""
+echo "=== Total AnarchyRuns ==="
+oc -n $NS get anarchyruns --no-headers | wc -l
 ```
 
-Record the current run count and distribution.
+Save these numbers — you will compare against them after creating new subjects.
 
-- [ ] **Step 2: User creates AnarchySubjects via UI**
+#### Phase 2: Generate Load
 
-The user creates multiple AnarchySubjects through the interface to generate AnarchyRuns.
+- [ ] **Step 2: Create AnarchySubjects via the UI**
 
-- [ ] **Step 3: Monitor run distribution between runners**
+Create multiple AnarchySubjects through the Anarchy interface to generate AnarchyRuns. Create at least 5 subjects to produce enough runs for meaningful distribution.
 
-Watch runs being created and assigned:
+- [ ] **Step 3: Monitor runs in real time (optional, three terminals)**
+
+Terminal 1 — watch runs being created:
 
 ```bash
 oc -n $NS get anarchyruns -w
 ```
 
-In a separate terminal, monitor which pods process runs:
+Terminal 2 — babylon runner (Go) logs:
 
 ```bash
 oc -n $NS logs -f deployment/babylon-runner 2>&1 | grep -i "run\|processing\|complete"
 ```
 
-And the default runner:
+Terminal 3 — default runner (Python) logs:
 
 ```bash
 oc -n $NS logs -f -l anarchy.gpte.redhat.com/runner=default 2>&1 | grep -i "run\|processing\|complete"
 ```
 
-- [ ] **Step 4: Verify runs completed successfully**
+Wait until all subjects finish provisioning (runs reach `successful` status).
 
-After subjects are created:
+#### Phase 3: Collect Results
 
-```bash
-oc -n $NS get anarchyruns --sort-by=.metadata.creationTimestamp | tail -20
-```
-
-Expected: runs show `runner` label with pods from BOTH runners. All runs reach `successful` state.
-
-- [ ] **Step 5: Verify run distribution across both runners**
+- [ ] **Step 4: Verify all runs completed successfully (zero failures)**
 
 ```bash
-# Check which runner pod processed each recent run
-oc -n $NS get anarchyruns --sort-by=.metadata.creationTimestamp -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels.anarchy\.gpte\.redhat\.com/runner}{"\n"}{end}' | tail -20
+echo "=== Run status summary ==="
+oc -n $NS get anarchyruns -o jsonpath='{range .items[*]}{.metadata.labels.anarchy\.gpte\.redhat\.com/runner}{"\n"}{end}' | sort | uniq -c | sort -rn
 
-# Count runs per runner pod
-oc -n $NS get anarchyruns -o jsonpath='{range .items[*]}{.metadata.labels.anarchy\.gpte\.redhat\.com/runner}{"\n"}{end}' | sort | uniq -c
+echo ""
+echo "=== Last 20 runs (time | name | runner) ==="
+oc -n $NS get anarchyruns --sort-by=.metadata.creationTimestamp \
+  -o jsonpath='{range .items[*]}{.metadata.creationTimestamp}{"\t"}{.metadata.name}{"\t"}{.status.runner.name}{"\n"}{end}' | tail -20
 ```
 
-Expected: runs distributed across pods from both `default` and `babylon` runners. Both runners show increased run counts compared to baseline.
+**Pass criteria:** all runs show `successful` status. Both `default` and `babylon` appear in the runner column.
 
----
+- [ ] **Step 5: Collect distribution numbers**
 
-### Task 9: Verify — Metrics
+```bash
+echo "=== Total runs per runner ==="
+oc -n $NS get anarchyruns -o jsonpath='{range .items[*]}{.status.runner.name}{"\n"}{end}' | sort | uniq -c | sort -rn
+```
 
-**Purpose:** Confirm the metrics endpoint is serving data.
+Record the counts. The Go runner typically absorbs more runs because it polls faster, but both runners must have processed runs.
 
-> **Note:** HPA and ServiceMonitor were disabled in `helm-vars-dev.yaml` for this test cycle (metrics-server instability on the dev cluster). They will be validated in production.
+- [ ] **Step 6: Collect performance metrics from the babylon (Go) runner**
 
-- [ ] **Step 1: Check metrics endpoint**
-
-The image is a static Go binary (distroless) — use port-forward:
+The Go runner exposes Prometheus metrics on port 9093. The Python runner does not expose metrics — this section covers Go runner only.
 
 ```bash
 POD=$(oc -n $NS get pod -l app.kubernetes.io/name=babylon-runner -o jsonpath='{.items[0].metadata.name}')
 oc -n $NS port-forward $POD 9093:9093 &
 sleep 2
-curl -s http://localhost:9093/metrics | head -40
-kill %1
+
+echo "=== Runs processed (by handler/action/status) ==="
+curl -s http://localhost:9093/metrics | grep ^babylon_runner_runs_total
+
+echo ""
+echo "=== Run duration (histogram) ==="
+curl -s http://localhost:9093/metrics | grep ^babylon_runner_run_duration_seconds
+
+echo ""
+echo "=== Tower API latency ==="
+curl -s http://localhost:9093/metrics | grep ^babylon_runner_tower_job_duration
+
+echo ""
+echo "=== Polling behavior ==="
+curl -s http://localhost:9093/metrics | grep ^babylon_runner_poll_duration
+
+echo ""
+echo "=== Current state ==="
+curl -s http://localhost:9093/metrics | grep ^babylon_runner_active_run
+
+kill %1 2>/dev/null
 ```
 
-Expected: Prometheus-formatted metrics output with `babylon_runner_*` metrics.
+**Available metrics and what they mean:**
 
-- [ ] **Step 2: Verify key metrics are present**
+| Metric                                          | Type      | What it measures                                                 |
+| ----------------------------------------------- | --------- | ---------------------------------------------------------------- |
+| `babylon_runner_runs_total`                     | Counter   | Total runs by `handler_type`, `action`, `status` (success/error) |
+| `babylon_runner_run_duration_seconds`           | Histogram | End-to-end time per run, by handler and action                   |
+| `babylon_runner_tower_job_duration_seconds`     | Histogram | Latency of each HTTP call to Tower/AAP                           |
+| `babylon_runner_sandbox_api_duration_seconds`   | Histogram | Latency of Sandbox API calls                                     |
+| `babylon_runner_scheduler_api_duration_seconds` | Histogram | Latency of Scheduler API calls                                   |
+| `babylon_runner_poll_duration_seconds`          | Histogram | Time spent on each GET /run poll (includes long-poll waits)      |
+| `babylon_runner_active_run`                     | Gauge     | 1 if processing a run, 0 if idle                                 |
 
-```bash
-POD=$(oc -n $NS get pod -l app.kubernetes.io/name=babylon-runner -o jsonpath='{.items[0].metadata.name}')
-oc -n $NS port-forward $POD 9093:9093 &
-sleep 2
-curl -s http://localhost:9093/metrics | grep -E "^babylon_runner_|^# HELP babylon_runner_" | head -20
-kill %1
+**How to read histogram output:**
+
+- `_count` = total number of observations
+- `_sum` = total seconds across all observations (divide by `_count` for average)
+- `_bucket{le="X"}` = how many observations completed in ≤ X seconds
+
+Example: if `_sum{action="provision"}` = 58.36 and `_count{action="provision"}` = 32, then average = 58.36 / 32 = **1.82s per provision**.
+
+#### Phase 4: Record Evidence
+
+- [ ] **Step 7: Summarize results**
+
+Fill in this template with the collected data:
+
+```markdown
+## E2E Test Results — Runner Coexistence
+
+Date: YYYY-MM-DD
+Cluster: ocp-babydev / babylon-anarchy-test
+Babylon Runner Image: <image SHA from Task 3>
+
+### Distribution
+
+- Total runs: \_\_\_
+- babylon (Go): **_ (_**%)
+- default (Python): **_ (_**%)
+- Failures: \_\_\_
+
+### Performance (Go runner only)
+
+- Provisioning: *** runs, avg ***s
+- Tower API: *** calls, avg ***ms, \_\_\_% < 500ms
+- Subject create: *** runs, avg ***ms
+- Active run at collection time: idle / processing
+
+### Verdict
+
+PASS / FAIL — reason: \_\_\_
 ```
 
-Expected: metrics related to runs processed, poll duration, errors, etc.
+**Pass criteria:**
+
+1. Both runners processed at least 1 run
+2. Zero failures across all run types
+3. No Tower API calls > 5s
+4. No provisioning runs > 30s
 
 ---
 
