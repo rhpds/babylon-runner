@@ -31,6 +31,7 @@ cleanup() {
   fi
   oc delete pod "$DEV_POD" -n "$NAMESPACE" --ignore-not-found --wait=false 2>/dev/null || true
   oc delete anarchyrunner "$RUNNER" -n "$NAMESPACE" --ignore-not-found --wait=false 2>/dev/null || true
+  return 0
 }
 trap cleanup EXIT INT TERM
 

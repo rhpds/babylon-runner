@@ -54,9 +54,46 @@ func completeStartNoDeployer(ctx context.Context, rc *runner.RunContext) error {
 	return nil
 }
 
+// handleStartSandbox runs the sandbox start call and returns true if
+// the start workflow is fully handled (deployer disabled path).
+func handleStartSandbox(ctx context.Context, rc *runner.RunContext) (handled bool, err error) {
+	if !rc.SandboxAPIInUse() || !sandboxActionEnabled(rc, "start") {
+		return false, nil
+	}
+	if err := sandboxStart(ctx, rc); err != nil {
+		slog.Error("runStart: sandbox start error", "subject", rc.SubjectName(), "error", err)
+		if rc.DeployerDisabled("start") {
+			rc.FinishAction("error")
+			return true, nil
+		}
+	}
+	if rc.DeployerDisabled("start") {
+		return true, completeStartNoDeployer(ctx, rc)
+	}
+	return false, nil
+}
+
+// launchStartTowerJob fetches sandbox vars and launches the Tower job for start.
+func launchStartTowerJob(ctx context.Context, rc *runner.RunContext) error {
+	var dynamicJobVars map[string]interface{}
+	if rc.SandboxAPIInUse() {
+		result, err := sandboxGet(ctx, rc, "start")
+		if err != nil {
+			slog.Error("runStart: sandbox get error", "subject", rc.SubjectName(), "error", err)
+		} else if result != nil {
+			dynamicJobVars = result.DynamicVars
+		}
+	}
+	if err := launchTowerJob(ctx, rc, "start", "starting", nil, dynamicJobVars); err != nil {
+		slog.Error("runStart: tower launch failed", "subject", rc.SubjectName(), "error", err)
+		return err
+	}
+	rc.ContinueAction(rc.TowerPollIntervals[0])
+	return nil
+}
+
 // runStart initiates the start workflow.
 func runStart(ctx context.Context, rc *runner.RunContext) error {
-	// Set startTimestamp.
 	ts := types.NowUTC()
 	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
@@ -73,40 +110,14 @@ func runStart(ctx context.Context, rc *runner.RunContext) error {
 		return err
 	}
 
-	// Sandbox API start if enabled.
-	if rc.SandboxAPIInUse() && sandboxActionEnabled(rc, "start") {
-		if err := sandboxStart(ctx, rc); err != nil {
-			slog.Error("runStart: sandbox start error", "subject", rc.SubjectName(), "error", err)
-			if rc.DeployerDisabled("start") {
-				rc.FinishAction("error")
-				return nil
-			}
-		}
-		// If deployer disabled for start: mark started immediately.
-		if rc.DeployerDisabled("start") {
-			return completeStartNoDeployer(ctx, rc)
-		}
+	handled, err := handleStartSandbox(ctx, rc)
+	if err != nil || handled {
+		return err
 	}
 
-	// If deployer not disabled: get sandbox vars and launch Tower job.
 	if !rc.DeployerDisabled("start") {
-		var dynamicJobVars map[string]interface{}
-		if rc.SandboxAPIInUse() {
-			result, err := sandboxGet(ctx, rc, "start")
-			if err != nil {
-				slog.Error("runStart: sandbox get error", "subject", rc.SubjectName(), "error", err)
-			} else if result != nil {
-				dynamicJobVars = result.DynamicVars
-			}
-		}
-		if err := launchTowerJob(ctx, rc, "start", "starting", nil, dynamicJobVars); err != nil {
-			slog.Error("runStart: tower launch failed", "subject", rc.SubjectName(), "error", err)
-			return err
-		}
-		rc.ContinueAction(rc.TowerPollIntervals[0])
-		return nil
+		return launchStartTowerJob(ctx, rc)
 	}
-
 	return nil
 }
 

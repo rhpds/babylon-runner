@@ -88,6 +88,30 @@ func scheduleStatusCheck(ctx context.Context, rc *runner.RunContext) error {
 	})
 }
 
+// tryScheduleAction schedules the action if it is supported by the governor.
+func tryScheduleAction(ctx context.Context, rc *runner.RunContext, action string) error {
+	if action == "" {
+		return nil
+	}
+	govActions := rc.GovernorActions()
+	if govActions == nil {
+		return nil
+	}
+	if _, ok := govActions[action]; !ok {
+		return nil
+	}
+	return scheduleUpdateAction(ctx, rc, action)
+}
+
+// previousCheckStatusTimestamp extracts the previous check_status_request_timestamp.
+func previousCheckStatusTimestamp(previousState map[string]interface{}) string {
+	if previousState == nil {
+		return ""
+	}
+	ts, _ := previousState["check_status_request_timestamp"].(string)
+	return ts
+}
+
 // handleEventUpdate handles the "update" subject event. It determines
 // whether an action (update/start/stop) is needed based on state and
 // job_vars changes, and checks for status requests.
@@ -105,19 +129,10 @@ func handleEventUpdate(ctx context.Context, rc *runner.RunContext) error {
 	}
 
 	action := determineUpdateAction(currentJobVars, previousJobVars, rc.CurrentState(), rc.DesiredState())
-
-	// If an action is determined and it exists in the governor actions, schedule it.
-	if action != "" {
-		if govActions := rc.GovernorActions(); govActions != nil {
-			if _, ok := govActions[action]; ok {
-				if err := scheduleUpdateAction(ctx, rc, action); err != nil {
-					return err
-				}
-			}
-		}
+	if err := tryScheduleAction(ctx, rc, action); err != nil {
+		return err
 	}
 
-	// Status check scheduling (only if governor has a status action).
 	govActions := rc.GovernorActions()
 	if govActions == nil {
 		return nil
@@ -126,16 +141,10 @@ func handleEventUpdate(ctx context.Context, rc *runner.RunContext) error {
 		return nil
 	}
 
-	previousState := rc.Payload.Subject.Status.PreviousState
-	previousTimestamp := ""
-	if previousState != nil {
-		previousTimestamp, _ = previousState["check_status_request_timestamp"].(string)
-	}
-
 	if shouldScheduleStatus(
 		rc.CheckStatusState(),
 		rc.Payload.Subject.Spec.Vars.GetString("check_status_request_timestamp"),
-		previousTimestamp,
+		previousCheckStatusTimestamp(rc.Payload.Subject.Status.PreviousState),
 	) {
 		return scheduleStatusCheck(ctx, rc)
 	}
