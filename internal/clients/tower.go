@@ -54,6 +54,22 @@ func InsertUnvaultString(vars map[string]interface{}) map[string]interface{} {
 	return result
 }
 
+// generateUniqueVaultVarName creates a unique random variable name that does
+// not collide with any existing key in the vaulted map.
+func generateUniqueVaultVarName(vaulted map[string]string) string {
+	for {
+		b := make([]byte, 12)
+		for i := range b {
+			n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(vaultVarChars))))
+			b[i] = vaultVarChars[n.Int64()]
+		}
+		name := "__vaulted_value_" + string(b)
+		if _, exists := vaulted[name]; !exists {
+			return name
+		}
+	}
+}
+
 func unvaultRecurse(value interface{}, vaulted map[string]string) interface{} {
 	switch v := value.(type) {
 	case map[string]interface{}:
@@ -70,18 +86,7 @@ func unvaultRecurse(value interface{}, vaulted map[string]string) interface{} {
 		return out
 	case string:
 		if strings.HasPrefix(strings.TrimSpace(v), "$ANSIBLE_VAULT;") {
-			var varName string
-			for {
-				b := make([]byte, 12)
-				for i := range b {
-					n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(vaultVarChars))))
-					b[i] = vaultVarChars[n.Int64()]
-				}
-				varName = "__vaulted_value_" + string(b)
-				if _, exists := vaulted[varName]; !exists {
-					break
-				}
-			}
+			varName := generateUniqueVaultVarName(vaulted)
 			vaulted[varName] = v
 			return "{{ lookup('unvault_string', " + varName + ") }}"
 		}
@@ -563,6 +568,128 @@ func (tc *TowerClient) SyncChildren(ctx context.Context, oauthToken, parentPath 
 	return nil
 }
 
+// ensureVaultCredentials creates vault credentials and looks up static
+// credentials by name, returning the combined list of credential IDs.
+func (tc *TowerClient) ensureVaultCredentials(ctx context.Context, token string, orgID int, config TowerJobConfig) ([]int, error) {
+	var credIDs []int
+
+	if len(config.VaultCredentials) > 0 {
+		vaultTypeID, err := tc.SearchResource(ctx, token, "/api/v2/credential_types/", "Vault")
+		if err != nil {
+			return nil, fmt.Errorf("find Vault credential type: %w", err)
+		}
+		if vaultTypeID == 0 {
+			return nil, fmt.Errorf("Vault credential type not found on Tower")
+		}
+		for vaultID, vaultPassword := range config.VaultCredentials {
+			credName := config.Organization + " " + vaultID
+			credID, err := tc.EnsureResource(ctx, token, pathCredentials, map[string]interface{}{
+				"name":            credName,
+				"credential_type": float64(vaultTypeID),
+				"inputs": map[string]interface{}{
+					"vault_id":       vaultID,
+					"vault_password": vaultPassword,
+				},
+				"organization": float64(orgID),
+			})
+			if err != nil {
+				return nil, fmt.Errorf("ensure vault credential %q: %w", vaultID, err)
+			}
+			credIDs = append(credIDs, credID)
+		}
+	}
+
+	for _, credName := range config.Credentials {
+		credID, err := tc.SearchResource(ctx, token, pathCredentials, credName)
+		if err != nil {
+			return nil, fmt.Errorf("find credential %q: %w", credName, err)
+		}
+		if credID > 0 {
+			credIDs = append(credIDs, credID)
+		}
+	}
+
+	return credIDs, nil
+}
+
+// ensureExecutionEnv ensures the execution environment exists on Tower.
+// Returns 0 if no EE is configured.
+func (tc *TowerClient) ensureExecutionEnv(ctx context.Context, token string, orgID int, config TowerJobConfig) (int, error) {
+	if config.ExecutionEnvironment == nil || config.ExecutionEnvironment.Image == "" {
+		return 0, nil
+	}
+
+	eeData := map[string]interface{}{
+		"name":         config.ExecutionEnvironment.Name,
+		"image":        config.ExecutionEnvironment.Image,
+		"organization": float64(orgID),
+	}
+	if config.ExecutionEnvironment.Pull != "" {
+		eeData["pull"] = config.ExecutionEnvironment.Pull
+	}
+
+	if config.ExecutionEnvironment.Private {
+		registry := strings.SplitN(config.ExecutionEnvironment.Image, "/", 2)[0]
+		regCredID, err := tc.SearchResource(ctx, token, pathCredentials, registry)
+		if err != nil {
+			slog.Warn("ensureExecutionEnv: registry credential lookup failed", "registry", registry, "error", err)
+		}
+		if regCredID > 0 {
+			eeData["credential"] = float64(regCredID)
+		}
+	}
+
+	eeID, err := tc.EnsureResource(ctx, token, "/api/v2/execution_environments/", eeData)
+	if err != nil {
+		return 0, fmt.Errorf("ensure execution environment: %w", err)
+	}
+	return eeID, nil
+}
+
+// resolveInstanceGroupIDs looks up instance groups by name, skipping any
+// that are not found or produce errors.
+func (tc *TowerClient) resolveInstanceGroupIDs(ctx context.Context, token string, config TowerJobConfig) []int {
+	var igIDs []int
+	for _, igName := range config.InstanceGroups {
+		igID, err := tc.SearchResource(ctx, token, "/api/v2/instance_groups/", igName)
+		if err != nil {
+			slog.Warn("resolveInstanceGroupIDs: lookup failed, skipping", "name", igName, "error", err)
+			continue
+		}
+		if igID == 0 {
+			slog.Warn("resolveInstanceGroupIDs: not found, skipping", "name", igName)
+			continue
+		}
+		igIDs = append(igIDs, igID)
+	}
+	return igIDs
+}
+
+// buildTemplateData constructs the job template data map from config,
+// project ID, and execution environment ID.
+func (tc *TowerClient) buildTemplateData(config TowerJobConfig, projID, eeID int) (map[string]interface{}, error) {
+	templateData := map[string]interface{}{
+		"name":                    config.TemplateName,
+		"project":                 float64(projID),
+		"playbook":                config.Playbook,
+		"ask_inventory_on_launch": true,
+	}
+	if config.Timeout > 0 {
+		templateData["timeout"] = float64(config.Timeout)
+	}
+	if eeID > 0 {
+		templateData["execution_environment"] = float64(eeID)
+	}
+	if config.ExtraVars != nil {
+		extraVarsJSON, err := json.Marshal(config.ExtraVars)
+		if err != nil {
+			return nil, fmt.Errorf("marshal extra_vars: %w", err)
+		}
+		templateData["extra_vars"] = string(extraVarsJSON)
+	}
+	return templateData, nil
+}
+
 // LaunchJob creates all required Tower resources and launches a job template.
 // Full workflow matching Ansible run-tower-job.yaml:
 //  1. Create token
@@ -599,45 +726,10 @@ func (tc *TowerClient) LaunchJob(ctx context.Context, config TowerJobConfig) (in
 		return 0, fmt.Errorf("ensure inventory: %w", err)
 	}
 
-	// Step 4: Create vault credentials (if any).
-	// Vault credentials are AWX credentials of type "Vault" with vault_id/vault_password inputs.
-	var credIDs []int
-	if len(config.VaultCredentials) > 0 {
-		// Find the "Vault" credential type ID.
-		vaultTypeID, err := tc.SearchResource(ctx, token, "/api/v2/credential_types/", "Vault")
-		if err != nil {
-			return 0, fmt.Errorf("find Vault credential type: %w", err)
-		}
-		if vaultTypeID == 0 {
-			return 0, fmt.Errorf("Vault credential type not found on Tower")
-		}
-		for vaultID, vaultPassword := range config.VaultCredentials {
-			credName := config.Organization + " " + vaultID
-			credID, err := tc.EnsureResource(ctx, token, pathCredentials, map[string]interface{}{
-				"name":            credName,
-				"credential_type": float64(vaultTypeID),
-				"inputs": map[string]interface{}{
-					"vault_id":       vaultID,
-					"vault_password": vaultPassword,
-				},
-				"organization": float64(orgID),
-			})
-			if err != nil {
-				return 0, fmt.Errorf("ensure vault credential %q: %w", vaultID, err)
-			}
-			credIDs = append(credIDs, credID)
-		}
-	}
-
-	// Look up static credentials by name.
-	for _, credName := range config.Credentials {
-		credID, err := tc.SearchResource(ctx, token, pathCredentials, credName)
-		if err != nil {
-			return 0, fmt.Errorf("find credential %q: %w", credName, err)
-		}
-		if credID > 0 {
-			credIDs = append(credIDs, credID)
-		}
+	// Step 4: Ensure vault and static credentials.
+	credIDs, err := tc.ensureVaultCredentials(ctx, token, orgID, config)
+	if err != nil {
+		return 0, err
 	}
 
 	// Step 5: Ensure project (with SCM settings).
@@ -657,60 +749,19 @@ func (tc *TowerClient) LaunchJob(ctx context.Context, config TowerJobConfig) (in
 	}
 
 	// Step 6: Ensure execution environment (if configured).
-	var eeID int
-	if config.ExecutionEnvironment != nil && config.ExecutionEnvironment.Image != "" {
-		eeData := map[string]interface{}{
-			"name":         config.ExecutionEnvironment.Name,
-			"image":        config.ExecutionEnvironment.Image,
-			"organization": float64(orgID),
-		}
-		if config.ExecutionEnvironment.Pull != "" {
-			eeData["pull"] = config.ExecutionEnvironment.Pull
-		}
-		// If the EE image is private, use the registry hostname as
-		// the credential name (must be pre-created on Tower).
-		if config.ExecutionEnvironment.Private {
-			registry := strings.SplitN(config.ExecutionEnvironment.Image, "/", 2)[0]
-			regCredID, err := tc.SearchResource(ctx, token, pathCredentials, registry)
-			if err != nil {
-				slog.Warn("LaunchJob: registry credential lookup failed for private EE", "registry", registry, "error", err)
-			}
-			if regCredID > 0 {
-				eeData["credential"] = float64(regCredID)
-			}
-		}
-		eeID, err = tc.EnsureResource(ctx, token, "/api/v2/execution_environments/", eeData)
-		if err != nil {
-			return 0, fmt.Errorf("ensure execution environment: %w", err)
-		}
+	eeID, err := tc.ensureExecutionEnv(ctx, token, orgID, config)
+	if err != nil {
+		return 0, err
 	}
 
 	// Step 7: Create job template (with retry via project update).
-	// extra_vars are set on the template (matching Ansible awx.awx.job_template),
-	// NOT at launch time. The launch only passes inventory.
-	templateData := map[string]interface{}{
-		"name":                    config.TemplateName,
-		"project":                 float64(projID),
-		"playbook":                config.Playbook,
-		"ask_inventory_on_launch": true,
-	}
-	if config.Timeout > 0 {
-		templateData["timeout"] = float64(config.Timeout)
-	}
-	if eeID > 0 {
-		templateData["execution_environment"] = float64(eeID)
-	}
-	if config.ExtraVars != nil {
-		extraVarsJSON, err := json.Marshal(config.ExtraVars)
-		if err != nil {
-			return 0, fmt.Errorf("marshal extra_vars: %w", err)
-		}
-		templateData["extra_vars"] = string(extraVarsJSON)
+	templateData, err := tc.buildTemplateData(config, projID, eeID)
+	if err != nil {
+		return 0, err
 	}
 
 	tmplID, err := tc.EnsureResource(ctx, token, pathJobTemplates, templateData)
 	if err != nil {
-		// Retry: update project SCM, then retry template creation.
 		_ = tc.UpdateProject(ctx, token, projID)
 		tmplID, err = tc.EnsureResource(ctx, token, pathJobTemplates, templateData)
 		if err != nil {
@@ -718,38 +769,24 @@ func (tc *TowerClient) LaunchJob(ctx context.Context, config TowerJobConfig) (in
 		}
 	}
 
-	// Step 8: Sync credentials with the template (idempotent diff-based).
+	// Step 8: Sync credentials and instance groups with the template.
 	if err := tc.SyncChildren(ctx, token, pathJobTemplates, tmplID, "credentials", credIDs); err != nil {
 		return 0, fmt.Errorf("sync credentials: %w", err)
 	}
 
-	// Sync instance groups with the template.
-	var igIDs []int
-	for _, igName := range config.InstanceGroups {
-		igID, err := tc.SearchResource(ctx, token, "/api/v2/instance_groups/", igName)
-		if err != nil {
-			slog.Warn("LaunchJob: instance group lookup failed, skipping", "name", igName, "error", err)
-			continue
-		}
-		if igID == 0 {
-			slog.Warn("LaunchJob: instance group not found, skipping", "name", igName)
-			continue
-		}
-		igIDs = append(igIDs, igID)
-	}
+	igIDs := tc.resolveInstanceGroupIDs(ctx, token, config)
 	if err := tc.SyncChildren(ctx, token, pathJobTemplates, tmplID, "instance_groups", igIDs); err != nil {
 		return 0, fmt.Errorf("sync instance groups: %w", err)
 	}
 
 	// Step 9: Launch the job template (with retry via project update).
+	launchPath := fmt.Sprintf("/api/v2/job_templates/%d/launch/", tmplID)
 	launchData := map[string]interface{}{
 		"inventory": float64(invID),
 	}
 
-	launchPath := fmt.Sprintf("/api/v2/job_templates/%d/launch/", tmplID)
 	jobID, err := tc.CreateResource(ctx, token, launchPath, launchData)
 	if err != nil {
-		// Retry: update project SCM, then retry launch.
 		_ = tc.UpdateProject(ctx, token, projID)
 		jobID, err = tc.CreateResource(ctx, token, launchPath, launchData)
 		if err != nil {

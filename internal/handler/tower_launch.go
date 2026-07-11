@@ -167,6 +167,68 @@ func resolveControllerCreds(rc *runner.RunContext, controller map[string]interfa
 	return username, password, nil
 }
 
+// resolveActionExtraVars gets action-specific extra_vars from the raw
+// governor __meta__.deployer.actions.<action>.extra_vars. Falls back to
+// {"ACTION": action} if none are configured.
+func resolveActionExtraVars(rc *runner.RunContext, action string) map[string]interface{} {
+	govAllVars := rc.GovernorAllVars()
+	rawMeta := types.GetNestedMap(govAllVars, "job_vars", "__meta__")
+	actionExtraVars := types.GetNestedMap(rawMeta, "deployer", "actions", action, "extra_vars")
+	if actionExtraVars != nil {
+		return actionExtraVars
+	}
+	return map[string]interface{}{"ACTION": action}
+}
+
+// resolveCallbackVars returns the callback URL and token variable names
+// from __meta__.deployer.callback_url_var and callback_token_var.
+// Defaults to "agnosticd_callback_url" and "agnosticd_callback_token".
+func resolveCallbackVars(rc *runner.RunContext) (urlVar, tokenVar string) {
+	urlVar = "agnosticd_callback_url"
+	tokenVar = "agnosticd_callback_token"
+	govAllVars := rc.GovernorAllVars()
+	rawMeta := types.GetNestedMap(govAllVars, "job_vars", "__meta__")
+	rawDeployer := types.GetNestedMap(rawMeta, "deployer")
+	if rawDeployer == nil {
+		return urlVar, tokenVar
+	}
+	if v, ok := rawDeployer["callback_url_var"].(string); ok && v != "" {
+		urlVar = v
+	}
+	if v, ok := rawDeployer["callback_token_var"].(string); ok && v != "" {
+		tokenVar = v
+	}
+	return urlVar, tokenVar
+}
+
+// resolveDeployerType returns the deployer type from meta, defaulting
+// to "agnosticd".
+func resolveDeployerType(meta *types.Meta) string {
+	if meta != nil && meta.Deployer != nil && meta.Deployer.Type != "" {
+		return meta.Deployer.Type
+	}
+	return "agnosticd"
+}
+
+// injectSCMRefVar sets the SCM ref variable in extraVars if
+// __meta__.deployer.scm_ref_var is configured and meta.Deployer.SCMRef
+// is non-empty.
+func injectSCMRefVar(rc *runner.RunContext, meta *types.Meta, extraVars map[string]interface{}) {
+	govAllVars := rc.GovernorAllVars()
+	rawMeta := types.GetNestedMap(govAllVars, "job_vars", "__meta__")
+	rawDeployer := types.GetNestedMap(rawMeta, "deployer")
+	if rawDeployer == nil {
+		return
+	}
+	scmRefVar, ok := rawDeployer["scm_ref_var"].(string)
+	if !ok || scmRefVar == "" {
+		return
+	}
+	if meta != nil && meta.Deployer != nil && meta.Deployer.SCMRef != "" {
+		extraVars[scmRefVar] = meta.Deployer.SCMRef
+	}
+}
+
 // buildJobExtraVars assembles the extra variables for a Tower job by
 // merging subject job_vars, governor job_vars, and dynamic vars (sandbox
 // creds), then applying action-specific overrides and callback vars.
@@ -191,7 +253,6 @@ func buildJobExtraVars(rc *runner.RunContext, action string, dynamicJobVars map[
 		types.DeepMergeMap(extraVars, dynamicJobVars)
 	}
 
-	// Debug: log what we got from each source.
 	slog.Debug("buildJobExtraVars sources",
 		"subjectJobVarsNil", rc.JobVars() == nil,
 		"governorJobVarsNil", rc.GovernorJobVars() == nil,
@@ -200,7 +261,6 @@ func buildJobExtraVars(rc *runner.RunContext, action string, dynamicJobVars map[
 	// Remove __meta__ from merged vars.
 	delete(extraVars, "__meta__")
 
-	// Debug: log final extra_vars keys.
 	keys := make([]string, 0, len(extraVars))
 	for k := range extraVars {
 		keys = append(keys, k)
@@ -208,41 +268,10 @@ func buildJobExtraVars(rc *runner.RunContext, action string, dynamicJobVars map[
 	slog.Debug("buildJobExtraVars", "numVars", len(extraVars), "keys", keys)
 
 	// Action extra_vars from deployer config, defaulting to {"ACTION": action}.
-	meta := rc.Meta()
-	if meta != nil && meta.Deployer != nil {
-		if actionCfg, ok := meta.Deployer.Actions[action]; ok {
-			// DeployerActionConfig doesn't have extra_vars; use the raw governor
-			// data for action extra_vars via the generic Actions map.
-			// The Actions map in GovernorSpec is map[string]map[string]interface{},
-			// but DeployerMeta.Actions is typed. We need to check for extra_vars
-			// in the raw deployer data.
-			// Since DeployerActionConfig doesn't have extra_vars, we won't merge
-			// them here -- fall through to the default.
-			_ = actionCfg
-		}
-	}
-	// Check raw deployer map for action extra_vars.
-	govAllVars := rc.GovernorAllVars()
-	rawMeta := types.GetNestedMap(govAllVars, "job_vars", "__meta__")
-	actionExtraVars := types.GetNestedMap(rawMeta, "deployer", "actions", action, "extra_vars")
-	if actionExtraVars != nil {
-		types.DeepMergeMap(extraVars, actionExtraVars)
-	} else {
-		extraVars["ACTION"] = action
-	}
+	types.DeepMergeMap(extraVars, resolveActionExtraVars(rc, action))
 
 	// Callback vars with configurable var names.
-	callbackURLVar := "agnosticd_callback_url"
-	callbackTokenVar := "agnosticd_callback_token"
-	rawDeployer := types.GetNestedMap(rawMeta, "deployer")
-	if rawDeployer != nil {
-		if v, ok := rawDeployer["callback_url_var"].(string); ok && v != "" {
-			callbackURLVar = v
-		}
-		if v, ok := rawDeployer["callback_token_var"].(string); ok && v != "" {
-			callbackTokenVar = v
-		}
-	}
+	callbackURLVar, callbackTokenVar := resolveCallbackVars(rc)
 	if rc.Payload.Action != nil {
 		if rc.Payload.Action.Spec.CallbackUrl != "" {
 			extraVars[callbackURLVar] = rc.Payload.Action.Spec.CallbackUrl
@@ -253,25 +282,15 @@ func buildJobExtraVars(rc *runner.RunContext, action string, dynamicJobVars map[
 	}
 
 	// output_dir if deployer_type is "agnosticd" (default).
-	deployerType := "agnosticd"
-	if meta != nil && meta.Deployer != nil && meta.Deployer.Type != "" {
-		deployerType = meta.Deployer.Type
-	}
-	if deployerType == "agnosticd" {
-		uuid := rc.UUID()
-		if uuid != "" {
+	meta := rc.Meta()
+	if resolveDeployerType(meta) == "agnosticd" {
+		if uuid := rc.UUID(); uuid != "" {
 			extraVars["output_dir"] = "/tmp/output-" + uuid
 		}
 	}
 
 	// scm_ref_var injection.
-	if rawDeployer != nil {
-		if scmRefVar, ok := rawDeployer["scm_ref_var"].(string); ok && scmRefVar != "" {
-			if meta != nil && meta.Deployer != nil && meta.Deployer.SCMRef != "" {
-				extraVars[scmRefVar] = meta.Deployer.SCMRef
-			}
-		}
-	}
+	injectSCMRefVar(rc, meta, extraVars)
 
 	return extraVars
 }
@@ -309,6 +328,135 @@ func getTowerClientForHost(rc *runner.RunContext, hostname string) (*clients.Tow
 	return nil, fmt.Errorf("controller %q not found in ansible_controllers", hostname)
 }
 
+// resolveTowerOrg returns the Tower organization from meta, defaulting
+// to "babylon".
+func resolveTowerOrg(meta *types.Meta) string {
+	if meta != nil && meta.Tower != nil && meta.Tower.Organization != "" {
+		return meta.Tower.Organization
+	}
+	return "babylon"
+}
+
+// resolveTowerTimeout returns the Tower job timeout from meta, defaulting
+// to 10800 seconds (3 hours).
+func resolveTowerTimeout(meta *types.Meta) int {
+	if meta != nil && meta.Tower != nil && meta.Tower.Timeout > 0 {
+		return meta.Tower.Timeout
+	}
+	return 10800
+}
+
+// resolveTowerInventory returns the Tower inventory name as
+// "{org} {suffix}" where suffix comes from meta or defaults to "default".
+func resolveTowerInventory(meta *types.Meta, org string) string {
+	suffix := "default"
+	if meta != nil && meta.Tower != nil && meta.Tower.Inventory != "" {
+		suffix = meta.Tower.Inventory
+	}
+	return org + " " + suffix
+}
+
+// resolveSCMSettings returns SCM settings for the Tower project.
+// updateOnLaunch is false if scmRef matches a release version pattern
+// (digits.digits). cacheTimeout defaults to 30, clean defaults to true.
+func resolveSCMSettings(meta *types.Meta, scmRef string) (updateOnLaunch bool, cacheTimeout int, clean bool) {
+	updateOnLaunch = !regexp.MustCompile(`\d+\.\d+$`).MatchString(scmRef)
+	cacheTimeout = 30
+	if meta != nil && meta.Deployer != nil && meta.Deployer.SCMCacheTimeout > 0 {
+		cacheTimeout = meta.Deployer.SCMCacheTimeout
+	}
+	clean = true
+	if meta != nil && meta.Deployer != nil && meta.Deployer.SCMClean != nil {
+		clean = *meta.Deployer.SCMClean
+	}
+	return updateOnLaunch, cacheTimeout, clean
+}
+
+// buildEEConfig builds the execution environment configuration from the
+// raw governor vars. Returns nil if the control plane type is not
+// "controller" or no EE image is configured.
+func buildEEConfig(rc *runner.RunContext, org string) *clients.EEConfig {
+	govAllVars := rc.GovernorAllVars()
+	rawMeta := types.GetNestedMap(govAllVars, "job_vars", "__meta__")
+
+	controlPlaneType := types.FirstString(
+		types.StringFromMap(types.GetNestedMap(rawMeta, "ansible_control_plane"), "type"),
+		"tower",
+	)
+	if controlPlaneType != "controller" {
+		return nil
+	}
+
+	rawDeployer := types.GetNestedMap(rawMeta, "deployer")
+	ee := types.GetNestedMap(rawDeployer, "execution_environment")
+	if ee == nil {
+		return nil
+	}
+
+	eeImage := types.StringFromMap(ee, "image")
+	if eeImage == "" {
+		return nil
+	}
+
+	eeName := types.StringFromMap(ee, "name")
+	if eeName == "" {
+		eeName = org + " " + eeImage
+	}
+	eePull, _ := ee["pull"].(string)
+	eePrivate, _ := ee["private"].(bool)
+
+	return &clients.EEConfig{
+		Name:    eeName,
+		Image:   eeImage,
+		Pull:    eePull,
+		Private: eePrivate,
+	}
+}
+
+// resolveInstanceGroups returns instance group names for the Tower job.
+// Checks action-specific override first, then falls back to global
+// ansible_control_plane.instance_groups.
+func resolveInstanceGroups(rc *runner.RunContext, action string) []string {
+	govAllVars := rc.GovernorAllVars()
+	rawMeta := types.GetNestedMap(govAllVars, "job_vars", "__meta__")
+	rawDeployer := types.GetNestedMap(rawMeta, "deployer")
+
+	// Per-action override first.
+	actionACP := types.GetNestedMap(rawDeployer, "actions", action, "ansible_control_plane")
+	if groups := types.ExtractStringSlice(actionACP, "instance_groups"); len(groups) > 0 {
+		return groups
+	}
+
+	// Global fallback.
+	acp := types.GetNestedMap(rawMeta, "ansible_control_plane")
+	return types.ExtractStringSlice(acp, "instance_groups")
+}
+
+// resolveStaticCredentials returns credential names from
+// __meta__.deployer.credentials.
+func resolveStaticCredentials(rc *runner.RunContext) []string {
+	govAllVars := rc.GovernorAllVars()
+	rawMeta := types.GetNestedMap(govAllVars, "job_vars", "__meta__")
+	rawDeployer := types.GetNestedMap(rawMeta, "deployer")
+	return types.ExtractStringSlice(rawDeployer, "credentials")
+}
+
+// resolveVaultCredentials returns vault credentials from
+// governor.spec.vars.vault_credentials as a map of vault_id to password.
+func resolveVaultCredentials(rc *runner.RunContext) map[string]string {
+	vcRaw, _ := rc.Payload.Governor.Spec.Vars.Get("vault_credentials").(map[string]interface{})
+	if len(vcRaw) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(vcRaw))
+	for k, v := range vcRaw {
+		if s, ok := v.(string); ok {
+			result[k] = s
+		}
+	}
+	return result
+}
+
 // launchTowerJob selects a controller, builds the job config, launches
 // the Tower job, and updates the subject status. If newState is non-empty,
 // it also transitions labels and current_state. extraSpecVars are merged
@@ -330,131 +478,33 @@ func launchTowerJob(rc *runner.RunContext, action, newState string, extraSpecVar
 		return fmt.Errorf("get tower client: %w", err)
 	}
 
-	// Organization from __meta__.tower.organization (default "babylon").
-	org := "babylon"
-	if meta != nil && meta.Tower != nil && meta.Tower.Organization != "" {
-		org = meta.Tower.Organization
-	}
-	// Timeout from __meta__.tower.timeout (default 10800).
-	timeout := 10800
-	if meta != nil && meta.Tower != nil && meta.Tower.Timeout > 0 {
-		timeout = meta.Tower.Timeout
-	}
-	// Inventory name: "{org} {tower.inventory|default('default')}".
-	inventorySuffix := "default"
-	if meta != nil && meta.Tower != nil && meta.Tower.Inventory != "" {
-		inventorySuffix = meta.Tower.Inventory
-	}
-	inventoryName := org + " " + inventorySuffix
+	org := resolveTowerOrg(meta)
+	scmUpdateOnLaunch, scmUpdateCacheTimeout, scmClean := resolveSCMSettings(meta, scmRef)
+
 	// Template name: "{org} {anarchy_action_name} {uuid}".
-	// anarchy_action_name is the K8s AnarchyAction resource name.
 	actionResourceName := ""
 	if rc.Payload.Action != nil {
 		actionResourceName = rc.Payload.Action.Metadata.Name
 	}
 	uuid := rc.UUID()
-	templateName := fmt.Sprintf("%s %s %s", org, actionResourceName, uuid)
-
-	// Project name: "{org} {scm_url} ({scm_ref})".
-	projectName := fmt.Sprintf("%s %s (%s)", org, scmURL, scmRef)
-
-	// SCM settings (matching Ansible run-tower-job.yaml):
-	// scm_update_on_launch: true unless scm_ref is a release version (digits.digits).
-	scmUpdateOnLaunch := true
-	if regexp.MustCompile(`\d+\.\d+$`).MatchString(scmRef) {
-		scmUpdateOnLaunch = false
-	}
-	// scm_update_cache_timeout: __meta__.deployer.scm_cache_timeout (default 30).
-	scmUpdateCacheTimeout := 30
-	if meta != nil && meta.Deployer != nil && meta.Deployer.SCMCacheTimeout > 0 {
-		scmUpdateCacheTimeout = meta.Deployer.SCMCacheTimeout
-	}
-	// scm_clean: __meta__.deployer.scm_clean (default true).
-	scmClean := true
-	if meta != nil && meta.Deployer != nil && meta.Deployer.SCMClean != nil {
-		scmClean = *meta.Deployer.SCMClean
-	}
-
-	// Execution environment (AAP2/Controller only).
-	// ansible_control_plane type from raw meta (not typed).
-	var eeConfig *clients.EEConfig
-	govAllVars := rc.GovernorAllVars()
-	rawMeta := types.GetNestedMap(govAllVars, "job_vars", "__meta__")
-	controlPlaneType := "tower"
-	acp := types.GetNestedMap(rawMeta, "ansible_control_plane")
-	if acp != nil {
-		if t, ok := acp["type"].(string); ok && t != "" {
-			controlPlaneType = t
-		}
-	}
-	rawDeployer := types.GetNestedMap(rawMeta, "deployer")
-	if controlPlaneType == "controller" {
-		ee := types.GetNestedMap(rawDeployer, "execution_environment")
-		if ee != nil {
-			eeImage, _ := ee["image"].(string)
-			if eeImage != "" {
-				eeName, _ := ee["name"].(string)
-				if eeName == "" {
-					eeName = org + " " + eeImage
-				}
-				eePull, _ := ee["pull"].(string)
-				eePrivate, _ := ee["private"].(bool)
-				eeConfig = &clients.EEConfig{
-					Name:    eeName,
-					Image:   eeImage,
-					Pull:    eePull,
-					Private: eePrivate,
-				}
-			}
-		}
-	}
-
-	// Instance groups: per-action first, then global fallback.
-	var instanceGroups []string
-	actionACP := types.GetNestedMap(rawDeployer, "actions", action, "ansible_control_plane")
-	if actionACP != nil {
-		instanceGroups = types.ExtractStringSlice(actionACP, "instance_groups")
-	}
-	if len(instanceGroups) == 0 && acp != nil {
-		instanceGroups = types.ExtractStringSlice(acp, "instance_groups")
-	}
-
-	// Static credentials from __meta__.deployer.credentials (default []).
-	var credentials []string
-	if rawDeployer != nil {
-		credentials = types.ExtractStringSlice(rawDeployer, "credentials")
-	}
-
-	// Vault credentials from governor.spec.vars.vault_credentials (default {}).
-	// Injected by the operator via varSecrets; always empty if not configured.
-	var vaultCredentials map[string]string
-	vcRaw, _ := rc.Payload.Governor.Spec.Vars.Get("vault_credentials").(map[string]interface{})
-	if len(vcRaw) > 0 {
-		vaultCredentials = make(map[string]string, len(vcRaw))
-		for k, v := range vcRaw {
-			if s, ok := v.(string); ok {
-				vaultCredentials[k] = s
-			}
-		}
-	}
 
 	config := clients.TowerJobConfig{
 		Organization:          org,
-		Inventory:             inventoryName,
-		ProjectName:           projectName,
+		Inventory:             resolveTowerInventory(meta, org),
+		ProjectName:           fmt.Sprintf("%s %s (%s)", org, scmURL, scmRef),
 		ProjectSCMURL:         scmURL,
 		ProjectSCMRef:         scmRef,
 		SCMUpdateOnLaunch:     scmUpdateOnLaunch,
 		SCMUpdateCacheTimeout: scmUpdateCacheTimeout,
 		SCMClean:              scmClean,
-		TemplateName:          templateName,
+		TemplateName:          fmt.Sprintf("%s %s %s", org, actionResourceName, uuid),
 		Playbook:              playbook,
 		ExtraVars:             clients.InsertUnvaultString(buildJobExtraVars(rc, action, dynamicJobVars)),
-		Timeout:               timeout,
-		ExecutionEnvironment:  eeConfig,
-		InstanceGroups:        instanceGroups,
-		Credentials:           credentials,
-		VaultCredentials:      vaultCredentials,
+		Timeout:               resolveTowerTimeout(meta),
+		ExecutionEnvironment:  buildEEConfig(rc, org),
+		InstanceGroups:        resolveInstanceGroups(rc, action),
+		Credentials:           resolveStaticCredentials(rc),
+		VaultCredentials:      resolveVaultCredentials(rc),
 	}
 
 	slog.Info("launching tower job", "action", action, "subject", rc.SubjectName(), "entryPoint", playbook)
