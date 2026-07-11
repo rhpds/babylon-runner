@@ -98,16 +98,8 @@ func trySchedulerSelection(rc *runner.RunContext, meta *types.Meta) (*clients.To
 		return nil, "", fmt.Errorf("scheduler API key: %w", err)
 	}
 
-	var candidates []clients.Candidate
-	for _, c := range meta.AnsibleControllers {
-		if h, ok := c["hostname"].(string); ok && h != "" {
-			candidates = append(candidates, clients.Candidate{Domain: h})
-		}
-	}
-
 	scheduler := clients.NewSchedulerClient(cs.URL, apiKey, rc.TowerTLSConfig)
 	resp, err := scheduler.Evaluate(rc.Ctx, clients.EvaluateRequest{
-		Candidates:    candidates,
 		RequireLabels: cs.RequireLabels,
 		PreferLabels:  cs.PreferLabels,
 		InstanceGroup: rc.ActionName(),

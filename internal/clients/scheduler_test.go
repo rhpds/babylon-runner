@@ -20,12 +20,6 @@ func TestSchedulerEvaluateSuccess(t *testing.T) {
 			t.Errorf("X-API-Key = %q, want %q", r.Header.Get("X-API-Key"), "test-key")
 		}
 
-		var req EvaluateRequest
-		json.NewDecoder(r.Body).Decode(&req)
-		if len(req.Candidates) != 2 {
-			t.Errorf("candidates = %d, want 2", len(req.Candidates))
-		}
-
 		json.NewEncoder(w).Encode(EvaluateResponse{
 			Ranked: []RankedController{
 				{Domain: "host1.example.com", Name: "ctrl-1", Score: 85.0, Eligible: true},
@@ -41,10 +35,6 @@ func TestSchedulerEvaluateSuccess(t *testing.T) {
 	defer cancel()
 
 	resp, err := client.Evaluate(ctx, EvaluateRequest{
-		Candidates: []Candidate{
-			{Domain: "host1.example.com"},
-			{Domain: "host2.example.com"},
-		},
 		RequireLabels: map[string]types.StringOrSlice{"env": {"prod"}},
 		InstanceGroup: "provision",
 	})
@@ -72,9 +62,7 @@ func TestSchedulerEvaluateServerError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := client.Evaluate(ctx, EvaluateRequest{
-		Candidates: []Candidate{{Domain: "host1"}},
-	})
+	_, err := client.Evaluate(ctx, EvaluateRequest{})
 	if err == nil {
 		t.Error("expected error for 500")
 	}
@@ -91,9 +79,7 @@ func TestSchedulerEvaluateTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	_, err := client.Evaluate(ctx, EvaluateRequest{
-		Candidates: []Candidate{{Domain: "host1"}},
-	})
+	_, err := client.Evaluate(ctx, EvaluateRequest{})
 	if err == nil {
 		t.Error("expected error for timeout")
 	}

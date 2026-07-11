@@ -12,14 +12,8 @@ import (
 	"github.com/rhpds/babylon-runner/internal/types"
 )
 
-// Candidate represents a controller hostname eligible for job scheduling.
-type Candidate struct {
-	Domain string `json:"domain"`
-}
-
 // EvaluateRequest is the request body for the controller scheduler API.
 type EvaluateRequest struct {
-	Candidates    []Candidate                    `json:"candidates"`
 	RequireLabels map[string]types.StringOrSlice `json:"require_labels,omitempty"`
 	PreferLabels  map[string]types.StringOrSlice `json:"prefer_labels,omitempty"`
 	InstanceGroup string                         `json:"instance_group,omitempty"`
