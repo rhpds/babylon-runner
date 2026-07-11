@@ -57,7 +57,7 @@ jobs:
         if: github.event_name != 'workflow_dispatch'
         run: |
           VERSION="${{ steps.image_tags.outputs.VERSION }}"
-          HELM_CHART_VERSION=$(sed -nr 's/^appVersion: "?(.*)"?/\1/p' helm/Chart.yaml)
+          HELM_CHART_VERSION=$(sed -nr 's/^appVersion: "?([^"]*)"?/\1/p' helm/Chart.yaml)
           if [[ "v${HELM_CHART_VERSION}" != "${VERSION}" ]]; then
             echo "Helm chart appVersion (${HELM_CHART_VERSION}) does not match tag version (${VERSION})!"
             exit 1

@@ -1,20 +1,21 @@
 #!/bin/bash
+set -euo pipefail
 
 die () {
     echo >&2 "$@"
     exit 1
 }
 
-if [[ "$1" == "--dev" || "$1" == "--force" ]]; then
+if [[ "${1:-}" == "--dev" || "${1:-}" == "--force" ]]; then
     BRANCH_OVERRIDE=1
     shift
 else
     BRANCH_OVERRIDE=0
 fi
 
-VERSION=$1
+VERSION=${1:-}
 
-CURRENT_VERSION=$(git tag | grep "^v[0-9]" | sort -V | tail -1)
+CURRENT_VERSION=$(git tag | grep "^v[0-9]" | sort -V | tail -1 || true)
 
 echo "CURRENT_VERSION: $CURRENT_VERSION"
 
@@ -40,28 +41,27 @@ if [[ 'main' != "$CURRENT_BRANCH" && $BRANCH_OVERRIDE -eq 0 ]]; then
     exit 1
 fi
 
-if [[ -n "$(git tag -l $VERSION)" ]]; then
+if [[ -n "$(git tag -l "$VERSION")" ]]; then
     echo "VERSION $VERSION already exists!"
     exit 1
 fi
 
-if [[ -n "${CURRENT_VERSION}" ]] && [[ $VERSION != $( (echo $VERSION; git tag | grep ^v[0-9]) | sort -V | tail -1) ]]; then
+if [[ -n "${CURRENT_VERSION}" ]] && [[ $VERSION != $( (echo "$VERSION"; git tag | grep "^v[0-9]" || true) | sort -V | tail -1) ]]; then
     echo "$VERSION is not semantically newest!"
     exit 1
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 echo "Generating version $VERSION - Last Version: $CURRENT_VERSION"
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' "s/^version:.*/version: ${VERSION:1}/" helm/Chart.yaml
-    sed -i '' "s/^appVersion:.*/appVersion: \"${VERSION:1}\"/" helm/Chart.yaml
-else
-    sed -i "s/^version:.*/version: ${VERSION:1}/" helm/Chart.yaml
-    sed -i "s/^appVersion:.*/appVersion: \"${VERSION:1}\"/" helm/Chart.yaml
-fi
+
+CHART="$SCRIPT_DIR/helm/Chart.yaml"
+sed "s/^version:.*/version: ${VERSION:1}/" "$CHART" | sed "s/^appVersion:.*/appVersion: ${VERSION:1}/" > "$CHART.tmp"
+mv "$CHART.tmp" "$CHART"
 
 git add helm/Chart.yaml
 git commit -m "Release $VERSION"
-git tag $VERSION
-git push origin $CURRENT_BRANCH $VERSION
+git tag "$VERSION"
+git push origin "$CURRENT_BRANCH" "$VERSION"
 
 exit 0
