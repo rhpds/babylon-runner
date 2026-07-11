@@ -49,6 +49,50 @@ type GovernorVars struct {
 	Extra      map[string]interface{} `json:"-"`
 }
 
+// unmarshalKnownField unmarshals a single key from raw into target if the key
+// exists. Returns nil when the key is absent; returns the unmarshal error
+// otherwise.
+func unmarshalKnownField(raw map[string]json.RawMessage, key string, target interface{}) error {
+	data, ok := raw[key]
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(data, target)
+}
+
+// collectExtra unmarshals all keys not present in known into a new map.
+func collectExtra(raw map[string]json.RawMessage, known map[string]bool) (map[string]interface{}, error) {
+	extra := make(map[string]interface{})
+	for k, rm := range raw {
+		if known[k] {
+			continue
+		}
+		var val interface{}
+		if err := json.Unmarshal(rm, &val); err != nil {
+			return nil, err
+		}
+		extra[k] = val
+	}
+	return extra, nil
+}
+
+// extractMeta re-marshals __meta__ from job_vars into a typed Meta struct.
+func extractMeta(jobVars map[string]interface{}) (*Meta, error) {
+	metaRaw, ok := jobVars["__meta__"]
+	if !ok {
+		return nil, nil
+	}
+	metaBytes, err := json.Marshal(metaRaw)
+	if err != nil {
+		return nil, err
+	}
+	m := &Meta{}
+	if err := json.Unmarshal(metaBytes, m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 func (v *GovernorVars) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -57,43 +101,26 @@ func (v *GovernorVars) UnmarshalJSON(data []byte) error {
 
 	known := map[string]bool{"job_vars": true, "sandbox_api": true}
 
-	if jv, ok := raw["job_vars"]; ok {
-		if err := json.Unmarshal(jv, &v.JobVars); err != nil {
-			return err
-		}
+	if err := unmarshalKnownField(raw, "job_vars", &v.JobVars); err != nil {
+		return err
 	}
 
 	// Extract __meta__ from inside job_vars (where it lives in real governors).
 	if v.JobVars != nil {
-		if metaRaw, ok := v.JobVars["__meta__"]; ok {
-			metaBytes, err := json.Marshal(metaRaw)
-			if err != nil {
-				return err
-			}
-			v.Meta = &Meta{}
-			if err := json.Unmarshal(metaBytes, v.Meta); err != nil {
-				return err
-			}
-		}
-	}
-
-	if sa, ok := raw["sandbox_api"]; ok {
-		if err := json.Unmarshal(sa, &v.SandboxAPI); err != nil {
+		m, err := extractMeta(v.JobVars)
+		if err != nil {
 			return err
 		}
+		v.Meta = m
 	}
 
-	v.Extra = make(map[string]interface{})
-	for k, rm := range raw {
-		if !known[k] {
-			var val interface{}
-			if err := json.Unmarshal(rm, &val); err != nil {
-				return err
-			}
-			v.Extra[k] = val
-		}
+	if err := unmarshalKnownField(raw, "sandbox_api", &v.SandboxAPI); err != nil {
+		return err
 	}
-	return nil
+
+	var err error
+	v.Extra, err = collectExtra(raw, known)
+	return err
 }
 
 func (v GovernorVars) MarshalJSON() ([]byte, error) {
@@ -253,16 +280,21 @@ func (v *SubjectVars) UnmarshalJSON(data []byte) error {
 		"healthy": true, "job_vars": true, "check_status_state": true,
 	}
 
-	if cs, ok := raw["current_state"]; ok {
-		if err := json.Unmarshal(cs, &v.CurrentState); err != nil {
+	for _, f := range []struct {
+		key    string
+		target interface{}
+	}{
+		{"current_state", &v.CurrentState},
+		{"desired_state", &v.DesiredState},
+		{"job_vars", &v.JobVars},
+		{"check_status_state", &v.CheckStatusState},
+	} {
+		if err := unmarshalKnownField(raw, f.key, f.target); err != nil {
 			return err
 		}
 	}
-	if ds, ok := raw["desired_state"]; ok {
-		if err := json.Unmarshal(ds, &v.DesiredState); err != nil {
-			return err
-		}
-	}
+
+	// healthy needs special handling because it is a *bool.
 	if h, ok := raw["healthy"]; ok {
 		var healthy bool
 		if err := json.Unmarshal(h, &healthy); err != nil {
@@ -270,28 +302,10 @@ func (v *SubjectVars) UnmarshalJSON(data []byte) error {
 		}
 		v.Healthy = &healthy
 	}
-	if jv, ok := raw["job_vars"]; ok {
-		if err := json.Unmarshal(jv, &v.JobVars); err != nil {
-			return err
-		}
-	}
-	if css, ok := raw["check_status_state"]; ok {
-		if err := json.Unmarshal(css, &v.CheckStatusState); err != nil {
-			return err
-		}
-	}
 
-	v.Extra = make(map[string]interface{})
-	for k, rm := range raw {
-		if !known[k] {
-			var val interface{}
-			if err := json.Unmarshal(rm, &val); err != nil {
-				return err
-			}
-			v.Extra[k] = val
-		}
-	}
-	return nil
+	var err error
+	v.Extra, err = collectExtra(raw, known)
+	return err
 }
 
 func (v SubjectVars) MarshalJSON() ([]byte, error) {

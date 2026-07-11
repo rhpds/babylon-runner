@@ -81,8 +81,7 @@ func sandboxGet(rc *runner.RunContext, action string) (*SandboxResult, error) {
 		return nil, err
 	}
 
-	ctx := rc.Ctx
-	placement, statusCode, err := client.GetPlacement(ctx, uuid)
+	placement, statusCode, err := client.GetPlacement(rc.Ctx, uuid)
 	if err != nil {
 		return nil, fmt.Errorf("get placement: %w", err)
 	}
@@ -110,27 +109,8 @@ func sandboxGet(rc *runner.RunContext, action string) (*SandboxResult, error) {
 	// Extract vars with creds for Tower extra_vars.
 	dynamicVars := extractSandboxVars(placement, true)
 
-	if len(subjectVars) > 0 || len(labels) > 0 {
-		patch := types.PatchBody{SkipUpdateProcessing: true}
-		if len(labels) > 0 {
-			patch.Metadata = &types.PatchMetadata{Labels: labels}
-		}
-		if len(subjectVars) > 0 {
-			// Merge non-secret vars into existing job_vars.
-			jv := rc.JobVars()
-			if jv == nil {
-				jv = make(map[string]interface{})
-			}
-			types.DeepMergeMap(jv, subjectVars)
-			patch.Spec = &types.PatchSpec{
-				Vars: map[string]interface{}{
-					"job_vars": jv,
-				},
-			}
-		}
-		if err := rc.SubjectUpdate(types.SubjectPatch{Patch: patch}); err != nil {
-			return nil, fmt.Errorf("update subject with sandbox vars: %w", err)
-		}
+	if err := updateSubjectSandboxVars(rc, subjectVars, labels); err != nil {
+		return nil, fmt.Errorf("update subject with sandbox vars: %w", err)
 	}
 
 	return &SandboxResult{
@@ -379,6 +359,63 @@ func pollSandboxRequest(ctx context.Context, client *clients.SandboxAPIClient, r
 	})
 }
 
+// updateSubjectSandboxVars patches the subject with sandbox-extracted labels
+// and merges non-secret vars into job_vars. It is a no-op when both maps are empty.
+func updateSubjectSandboxVars(rc *runner.RunContext, subjectVars map[string]interface{}, labels map[string]string) error {
+	if len(subjectVars) == 0 && len(labels) == 0 {
+		return nil
+	}
+	patch := types.PatchBody{SkipUpdateProcessing: true}
+	if len(labels) > 0 {
+		patch.Metadata = &types.PatchMetadata{Labels: labels}
+	}
+	if len(subjectVars) > 0 {
+		jv := rc.JobVars()
+		if jv == nil {
+			jv = make(map[string]interface{})
+		}
+		types.DeepMergeMap(jv, subjectVars)
+		patch.Spec = &types.PatchSpec{
+			Vars: map[string]interface{}{
+				"job_vars": jv,
+			},
+		}
+	}
+	return rc.SubjectUpdate(types.SubjectPatch{Patch: patch})
+}
+
+// copyWithInjectedAnnotations returns a shallow copy of a sandbox resource
+// map with "var" and "namespace_suffix" top-level keys injected into its
+// annotations sub-map. Annotations are also shallow-copied to avoid mutation.
+func copyWithInjectedAnnotations(sb map[string]interface{}) map[string]interface{} {
+	cp := make(map[string]interface{}, len(sb))
+	for k, v := range sb {
+		cp[k] = v
+	}
+
+	ann, _ := cp["annotations"].(map[string]interface{})
+	if ann == nil {
+		ann = make(map[string]interface{})
+	} else {
+		annCopy := make(map[string]interface{}, len(ann))
+		for k, v := range ann {
+			annCopy[k] = v
+		}
+		ann = annCopy
+	}
+
+	if v, ok := cp["var"].(string); ok && v != "" {
+		ann["var"] = v
+	}
+	if v, ok := cp["namespace_suffix"].(string); ok && v != "" {
+		ann["namespace_suffix"] = v
+	}
+	if len(ann) > 0 {
+		cp["annotations"] = ann
+	}
+	return cp
+}
+
 // injectVarAnnotations copies the "var" and "namespace_suffix" fields
 // from each sandbox resource into its annotations, matching the Python
 // inject_var_annotations filter.
@@ -390,32 +427,7 @@ func injectVarAnnotations(sandboxes []interface{}) []interface{} {
 			result[i] = s
 			continue
 		}
-		// Shallow copy to avoid mutating the original.
-		cp := make(map[string]interface{}, len(sb))
-		for k, v := range sb {
-			cp[k] = v
-		}
-		ann, _ := cp["annotations"].(map[string]interface{})
-		if ann == nil {
-			ann = make(map[string]interface{})
-		} else {
-			// Copy annotations too.
-			annCopy := make(map[string]interface{}, len(ann))
-			for k, v := range ann {
-				annCopy[k] = v
-			}
-			ann = annCopy
-		}
-		if v, ok := cp["var"].(string); ok && v != "" {
-			ann["var"] = v
-		}
-		if v, ok := cp["namespace_suffix"].(string); ok && v != "" {
-			ann["namespace_suffix"] = v
-		}
-		if len(ann) > 0 {
-			cp["annotations"] = ann
-		}
-		result[i] = cp
+		result[i] = copyWithInjectedAnnotations(sb)
 	}
 	return result
 }

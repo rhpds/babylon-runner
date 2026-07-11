@@ -301,6 +301,25 @@ func handleStartFailure(rc *runner.RunContext, status string) error {
 	return nil
 }
 
+// buildStopFailureVars builds the spec vars for a stop failure update.
+// It sets current_state and healthy=false, and on "failed" status adds
+// agnosticd_collect_forensics=true to job_vars.
+func buildStopFailureVars(rc *runner.RunContext, status, state string) map[string]interface{} {
+	specVars := map[string]interface{}{
+		"current_state": state,
+		"healthy":       false,
+	}
+	if status == "failed" {
+		jv := rc.JobVars()
+		if jv == nil {
+			jv = make(map[string]interface{})
+		}
+		jv["agnosticd_collect_forensics"] = true
+		specVars["job_vars"] = jv
+	}
+	return specVars
+}
+
 // handleStopFailure handles stop job error/failure.
 // Calls sandbox stop first, then retries if desired_state is "stopped",
 // schedules start if "started".
@@ -316,20 +335,7 @@ func handleStopFailure(rc *runner.RunContext, status string) error {
 
 	ts := types.NowUTC()
 	state := fmt.Sprintf("stop-%s", status)
-
-	specVars := map[string]interface{}{
-		"current_state": state,
-		"healthy":       false,
-	}
-	// On failed, set agnosticd_collect_forensics.
-	if status == "failed" {
-		jv := rc.JobVars()
-		if jv == nil {
-			jv = make(map[string]interface{})
-		}
-		jv["agnosticd_collect_forensics"] = true
-		specVars["job_vars"] = jv
-	}
+	specVars := buildStopFailureVars(rc, status, state)
 
 	if err := rc.SubjectUpdate(types.SubjectPatch{
 		Patch: types.PatchBody{

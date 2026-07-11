@@ -220,6 +220,35 @@ func (r *Runner) getRun(ctx context.Context) (*types.RunPayload, error) {
 	}
 }
 
+// attemptPostResult performs a single POST attempt to submit a run result.
+// Returns nil on 2xx, a permanent error on 4xx (should not retry), or a
+// retryable error on transport failures and 5xx responses.
+func (r *Runner) attemptPostResult(ctx context.Context, url string, result types.RunResult) error {
+	body, _ := json.Marshal(map[string]interface{}{"result": result})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url,
+		strings.NewReader(string(body)))
+	if err != nil {
+		return fmt.Errorf("permanent: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", r.config.AuthHeader())
+
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("transport: %w", err)
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		return fmt.Errorf("POST result rejected: %d %s", resp.StatusCode, string(respBody))
+	}
+	return fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody))
+}
+
 // postResult posts the handler result back to Anarchy. It retries up to
 // maxRetries times with increasing delays capped at 60s.
 func (r *Runner) postResult(ctx context.Context, runName string, result types.RunResult) error {
@@ -242,30 +271,18 @@ func (r *Runner) postResult(ctx context.Context, runName string, result types.Ru
 			case <-time.After(delay):
 			}
 		}
-		body, _ := json.Marshal(map[string]interface{}{"result": result})
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url,
-			strings.NewReader(string(body)))
-		if err != nil {
-			return err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", r.config.AuthHeader())
 
-		resp, err := r.client.Do(req)
-		if err != nil {
-			lastErr = err
-			slog.Warn("POST result transport error", "run", runName, "attempt", attempt, "error", err)
-			continue
-		}
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		err := r.attemptPostResult(ctx, url, result)
+		if err == nil {
 			return nil
 		}
-		lastErr = fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody))
-		slog.Warn("POST result failed", "status", resp.StatusCode, "body", string(respBody), "run", runName)
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			return fmt.Errorf("POST result rejected: %d %s", resp.StatusCode, string(respBody))
+		lastErr = err
+		slog.Warn("POST result failed", "run", runName, "attempt", attempt, "error", err)
+
+		// 4xx errors from attemptPostResult start with "POST result rejected"
+		// and should not be retried.
+		if strings.HasPrefix(err.Error(), "POST result rejected") {
+			return err
 		}
 	}
 	return fmt.Errorf("POST result failed after %d retries: %v", maxRetries, lastErr)

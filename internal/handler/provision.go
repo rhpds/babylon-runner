@@ -342,6 +342,45 @@ func handleProvisionCanceled(rc *runner.RunContext) error {
 	return nil
 }
 
+// buildDequeuedPatch constructs the PatchBody for transitioning a provision
+// from queued to pending after its sandbox placement is ready.
+func buildDequeuedPatch(rc *runner.RunContext, placement map[string]interface{}, placementStatus string) types.PatchBody {
+	dynamicVars := extractSandboxVars(placement, false)
+	labels := extractSandboxLabels(placement)
+
+	allLabels := make(map[string]string)
+	for k, v := range labels {
+		allLabels[k] = v
+	}
+	allLabels["state"] = statePending
+
+	specVars := map[string]interface{}{
+		"current_state": statePending,
+	}
+	if len(dynamicVars) > 0 {
+		jv := rc.JobVars()
+		if jv == nil {
+			jv = make(map[string]interface{})
+		}
+		types.DeepMergeMap(jv, dynamicVars)
+		specVars["job_vars"] = jv
+	}
+
+	return types.PatchBody{
+		Metadata: &types.PatchMetadata{Labels: allLabels},
+		Spec:     &types.PatchSpec{Vars: specVars},
+		Status: map[string]interface{}{
+			"sandboxAPIJobs": map[string]interface{}{
+				"provision": map[string]interface{}{
+					"placementStatus":   placementStatus,
+					"dequeuedTimestamp": types.NowUTC(),
+				},
+			},
+		},
+		SkipUpdateProcessing: true,
+	}
+}
+
 // checkProvisionQueue checks whether a queued provision can proceed
 // by polling the sandbox API placement status.
 func checkProvisionQueue(rc *runner.RunContext) error {
@@ -397,47 +436,11 @@ func checkProvisionQueue(rc *runner.RunContext) error {
 		return nil
 
 	default:
-		// Success: extract vars (no creds for subject), update subject, and restart provision.
-		dynamicVars := extractSandboxVars(placement, false)
-		labels := extractSandboxLabels(placement)
-		patch := types.PatchBody{SkipUpdateProcessing: true}
-
-		// Merge labels.
-		allLabels := make(map[string]string)
-		for k, v := range labels {
-			allLabels[k] = v
-		}
-		allLabels["state"] = statePending
-		patch.Metadata = &types.PatchMetadata{Labels: allLabels}
-
-		// Merge dynamic vars into job_vars.
-		specVars := map[string]interface{}{
-			"current_state": statePending,
-		}
-		if len(dynamicVars) > 0 {
-			jv := rc.JobVars()
-			if jv == nil {
-				jv = make(map[string]interface{})
-			}
-			types.DeepMergeMap(jv, dynamicVars)
-			specVars["job_vars"] = jv
-		}
-		patch.Spec = &types.PatchSpec{Vars: specVars}
-
-		patch.Status = map[string]interface{}{
-			"sandboxAPIJobs": map[string]interface{}{
-				"provision": map[string]interface{}{
-					"placementStatus":   placementStatus,
-					"dequeuedTimestamp": types.NowUTC(),
-				},
-			},
-		}
-
+		// Success: build dequeued patch, update subject, and restart provision.
+		patch := buildDequeuedPatch(rc, placement, placementStatus)
 		if err := rc.SubjectUpdate(types.SubjectPatch{Patch: patch}); err != nil {
 			return err
 		}
-
-		// Restart the provision flow now that sandbox is ready.
 		return runProvision(rc)
 	}
 }

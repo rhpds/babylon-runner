@@ -42,12 +42,7 @@ func handleDestroy(rc *runner.RunContext) error {
 		}
 		if errorStates[currentState] || rc.DeployerDisabled("destroy") {
 			slog.Info("handleDestroy: destroy catch-all triggered", "subject", rc.SubjectName(), "state", currentState)
-			if err := sandboxCleanup(rc); err != nil {
-				slog.Error("handleDestroy: sandbox cleanup error", "subject", rc.SubjectName(), "error", err)
-			}
-			rc.DeleteSubject(true)
-			rc.FinishAction("successful")
-			return nil
+			return handleDestroyCatchAll(rc)
 		}
 	}
 
@@ -61,6 +56,17 @@ func handleDestroy(rc *runner.RunContext) error {
 		return checkDeployerJob(rc, "destroy")
 	}
 
+	return nil
+}
+
+// handleDestroyCatchAll performs sandbox cleanup and subject deletion for the
+// destroy catch-all path (error states or deployer disabled).
+func handleDestroyCatchAll(rc *runner.RunContext) error {
+	if err := sandboxCleanup(rc); err != nil {
+		slog.Error("handleDestroyCatchAll: sandbox cleanup error", "subject", rc.SubjectName(), "error", err)
+	}
+	rc.DeleteSubject(true)
+	rc.FinishAction("successful")
 	return nil
 }
 

@@ -60,39 +60,47 @@ func runStop(rc *runner.RunContext) error {
 
 	// Deployer disabled and sandbox API in use: perform sandbox API stop.
 	if rc.SandboxAPIInUse() && sandboxActionEnabled(rc, "stop") {
-		if err := sandboxStop(rc); err != nil {
-			slog.Error("runStop: sandbox stop error", "subject", rc.SubjectName(), "error", err)
-			rc.FinishAction("error")
-			return nil
-		}
-		ts := types.NowUTC()
-		if err := rc.SubjectUpdate(types.SubjectPatch{
-			Patch: types.PatchBody{
-				Metadata: &types.PatchMetadata{
-					Labels: map[string]string{
-						"state": "stopped",
-					},
-				},
-				Spec: &types.PatchSpec{
-					Vars: map[string]interface{}{
-						"current_state": "stopped",
-					},
-				},
-				Status: map[string]interface{}{
-					"actions": map[string]interface{}{
-						"stop": map[string]interface{}{
-							"completeTimestamp": ts,
-						},
-					},
-				},
-				SkipUpdateProcessing: true,
-			},
-		}); err != nil {
-			return err
-		}
-		rc.FinishAction("successful")
+		return completeStopNoDeployer(rc)
 	}
 
+	return nil
+}
+
+// completeStopNoDeployer handles the stop completion path when the deployer is
+// disabled and sandbox API is in use. It performs the sandbox stop and updates
+// the subject state to "stopped".
+func completeStopNoDeployer(rc *runner.RunContext) error {
+	if err := sandboxStop(rc); err != nil {
+		slog.Error("completeStopNoDeployer: sandbox stop error", "subject", rc.SubjectName(), "error", err)
+		rc.FinishAction("error")
+		return nil
+	}
+	ts := types.NowUTC()
+	if err := rc.SubjectUpdate(types.SubjectPatch{
+		Patch: types.PatchBody{
+			Metadata: &types.PatchMetadata{
+				Labels: map[string]string{
+					"state": "stopped",
+				},
+			},
+			Spec: &types.PatchSpec{
+				Vars: map[string]interface{}{
+					"current_state": "stopped",
+				},
+			},
+			Status: map[string]interface{}{
+				"actions": map[string]interface{}{
+					"stop": map[string]interface{}{
+						"completeTimestamp": ts,
+					},
+				},
+			},
+			SkipUpdateProcessing: true,
+		},
+	}); err != nil {
+		return err
+	}
+	rc.FinishAction("successful")
 	return nil
 }
 
