@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -17,7 +18,7 @@ func TestHandleEventCreate(t *testing.T) {
 
 	rc := newTestRunContext(t, server)
 
-	if err := handleEventCreate(rc); err != nil {
+	if err := handleEventCreate(context.Background(), rc); err != nil {
 		t.Fatalf("handleEventCreate returned error: %v", err)
 	}
 
@@ -75,7 +76,7 @@ func TestHandleEventCreateSetsGUID(t *testing.T) {
 
 	rc := newTestRunContext(t, server)
 
-	if err := handleEventCreate(rc); err != nil {
+	if err := handleEventCreate(context.Background(), rc); err != nil {
 		t.Fatalf("handleEventCreate returned error: %v", err)
 	}
 
@@ -122,7 +123,7 @@ func TestHandleEventCreatePreservesExistingGUID(t *testing.T) {
 		"guid": existingGUID,
 	}
 
-	if err := handleEventCreate(rc); err != nil {
+	if err := handleEventCreate(context.Background(), rc); err != nil {
 		t.Fatalf("handleEventCreate returned error: %v", err)
 	}
 
@@ -157,7 +158,7 @@ func TestHandleEventCreateAlreadyInitialized(t *testing.T) {
 	// Set current_state so the handler considers it already initialized.
 	rc.Payload.Subject.Spec.Vars.CurrentState = "started"
 
-	if err := handleEventCreate(rc); err != nil {
+	if err := handleEventCreate(context.Background(), rc); err != nil {
 		t.Fatalf("handleEventCreate returned error: %v", err)
 	}
 
@@ -193,7 +194,7 @@ func TestHandleEventUpdateStartStop(t *testing.T) {
 		"job_vars": map[string]interface{}{"guid": "abc"},
 	}
 
-	if err := handleEventUpdate(rc); err != nil {
+	if err := handleEventUpdate(context.Background(), rc); err != nil {
 		t.Fatalf("handleEventUpdate returned error: %v", err)
 	}
 
@@ -244,7 +245,7 @@ func TestHandleEventUpdateLegacyStatusPath(t *testing.T) {
 	// Legacy path: check_status_state = "pending", no timestamp.
 	rc.Payload.Subject.Spec.Vars.CheckStatusState = "pending"
 
-	if err := handleEventUpdate(rc); err != nil {
+	if err := handleEventUpdate(context.Background(), rc); err != nil {
 		t.Fatalf("handleEventUpdate returned error: %v", err)
 	}
 
@@ -299,7 +300,7 @@ func TestHandleEventUpdateTimestampStatusPath(t *testing.T) {
 		"check_status_request_timestamp": "2024-01-01T00:00:00Z",
 	}
 
-	if err := handleEventUpdate(rc); err != nil {
+	if err := handleEventUpdate(context.Background(), rc); err != nil {
 		t.Fatalf("handleEventUpdate returned error: %v", err)
 	}
 
@@ -332,7 +333,7 @@ func TestHandleEventUpdateNoStatusWithoutGovernorAction(t *testing.T) {
 	// Legacy path: check_status_state = "pending" -- but no governor status action.
 	rc.Payload.Subject.Spec.Vars.CheckStatusState = "pending"
 
-	if err := handleEventUpdate(rc); err != nil {
+	if err := handleEventUpdate(context.Background(), rc); err != nil {
 		t.Fatalf("handleEventUpdate returned error: %v", err)
 	}
 
@@ -357,7 +358,7 @@ func TestHandleEventUpdateNoChange(t *testing.T) {
 		"job_vars": map[string]interface{}{"guid": "abc"},
 	}
 
-	if err := handleEventUpdate(rc); err != nil {
+	if err := handleEventUpdate(context.Background(), rc); err != nil {
 		t.Fatalf("handleEventUpdate returned error: %v", err)
 	}
 
@@ -383,7 +384,7 @@ func TestHandleEventUpdateStartAction(t *testing.T) {
 		"job_vars": map[string]interface{}{"guid": "abc"},
 	}
 
-	if err := handleEventUpdate(rc); err != nil {
+	if err := handleEventUpdate(context.Background(), rc); err != nil {
 		t.Fatalf("handleEventUpdate returned error: %v", err)
 	}
 
@@ -447,7 +448,7 @@ func TestHandleEventUpdateJobVarsChanged(t *testing.T) {
 		"job_vars": map[string]interface{}{"guid": "abc"},
 	}
 
-	if err := handleEventUpdate(rc); err != nil {
+	if err := handleEventUpdate(context.Background(), rc); err != nil {
 		t.Fatalf("handleEventUpdate returned error: %v", err)
 	}
 
@@ -499,7 +500,7 @@ func TestHandleEventDeleteWithDestroy(t *testing.T) {
 		},
 	}
 
-	if err := handleEventDelete(rc); err != nil {
+	if err := handleEventDelete(context.Background(), rc); err != nil {
 		t.Fatalf("handleEventDelete returned error: %v", err)
 	}
 
@@ -539,7 +540,7 @@ func TestHandleEventDeleteWithoutDestroy(t *testing.T) {
 	rc := newTestRunContext(t, server)
 	// No provision tower job -> should delete without destroy.
 
-	if err := handleEventDelete(rc); err != nil {
+	if err := handleEventDelete(context.Background(), rc); err != nil {
 		t.Fatalf("handleEventDelete returned error: %v", err)
 	}
 
@@ -594,7 +595,7 @@ func TestHandleEventDeleteDeployerDisabled(t *testing.T) {
 		},
 	}
 
-	if err := handleEventDelete(rc); err != nil {
+	if err := handleEventDelete(context.Background(), rc); err != nil {
 		t.Fatalf("handleEventDelete returned error: %v", err)
 	}
 
@@ -643,7 +644,7 @@ func TestHandleDestroyWithCatchAll(t *testing.T) {
 		},
 	}
 
-	if err := handleDestroy(rc); err != nil {
+	if err := handleDestroy(context.Background(), rc); err != nil {
 		t.Fatalf("handleDestroy returned error: %v", err)
 	}
 
@@ -675,7 +676,7 @@ func TestHandleDestroyPending(t *testing.T) {
 	// Set state to destroy-pending with no sandbox API.
 	rc.Payload.Subject.Spec.Vars.CurrentState = "destroy-pending"
 
-	if err := handleDestroy(rc); err != nil {
+	if err := handleDestroy(context.Background(), rc); err != nil {
 		t.Fatalf("handleDestroy returned error: %v", err)
 	}
 
@@ -710,7 +711,7 @@ func TestHandleDestroyComplete(t *testing.T) {
 
 	rc := newTestRunContext(t, server)
 
-	if err := handleDestroyComplete(rc); err != nil {
+	if err := handleDestroyComplete(context.Background(), rc); err != nil {
 		t.Fatalf("handleDestroyComplete returned error: %v", err)
 	}
 
@@ -788,7 +789,7 @@ func TestHandleDestroyDeployerDisabledNoCatchAll(t *testing.T) {
 		},
 	}
 
-	if err := handleDestroy(rc); err != nil {
+	if err := handleDestroy(context.Background(), rc); err != nil {
 		t.Fatalf("handleDestroy returned error: %v", err)
 	}
 
@@ -827,7 +828,7 @@ func TestCheckDeployerJobSuccessful(t *testing.T) {
 		},
 	}
 
-	err := checkDeployerJob(rc, "provision")
+	err := checkDeployerJob(context.Background(), rc, "provision")
 	if err != nil {
 		t.Fatalf("checkDeployerJob error: %v", err)
 	}
@@ -865,7 +866,7 @@ func TestCheckDeployerJobFailed(t *testing.T) {
 		},
 	}
 
-	err := checkDeployerJob(rc, "provision")
+	err := checkDeployerJob(context.Background(), rc, "provision")
 	if err != nil {
 		t.Fatalf("checkDeployerJob error: %v", err)
 	}
@@ -903,7 +904,7 @@ func TestCheckDeployerJobStillRunning(t *testing.T) {
 		},
 	}
 
-	err := checkDeployerJob(rc, "provision")
+	err := checkDeployerJob(context.Background(), rc, "provision")
 	if err != nil {
 		t.Fatalf("checkDeployerJob error: %v", err)
 	}
@@ -923,7 +924,7 @@ func TestCheckDeployerJobNoTowerJobInfo(t *testing.T) {
 	}
 	// No towerJobs in status -> should ContinueAction 5m.
 
-	err := checkDeployerJob(rc, "provision")
+	err := checkDeployerJob(context.Background(), rc, "provision")
 	if err != nil {
 		t.Fatalf("checkDeployerJob error: %v", err)
 	}
@@ -955,7 +956,7 @@ func TestCheckDeployerJobMissingDeployerJobField(t *testing.T) {
 		},
 	}
 
-	err := checkDeployerJob(rc, "provision")
+	err := checkDeployerJob(context.Background(), rc, "provision")
 	if err != nil {
 		t.Fatalf("checkDeployerJob error: %v", err)
 	}
@@ -983,7 +984,7 @@ func TestCheckDeployerJobMissingTowerHost(t *testing.T) {
 		},
 	}
 
-	err := checkDeployerJob(rc, "provision")
+	err := checkDeployerJob(context.Background(), rc, "provision")
 	if err != nil {
 		t.Fatalf("checkDeployerJob error: %v", err)
 	}
@@ -1022,7 +1023,7 @@ func TestCheckDeployerJobCanceled(t *testing.T) {
 		},
 	}
 
-	err := checkDeployerJob(rc, "provision")
+	err := checkDeployerJob(context.Background(), rc, "provision")
 	if err != nil {
 		t.Fatalf("checkDeployerJob error: %v", err)
 	}
@@ -1072,7 +1073,7 @@ func TestCheckDeployerJobError(t *testing.T) {
 		},
 	}
 
-	err := checkDeployerJob(rc, "provision")
+	err := checkDeployerJob(context.Background(), rc, "provision")
 	if err != nil {
 		t.Fatalf("checkDeployerJob error: %v", err)
 	}

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/rhpds/babylon-runner/internal/runner"
@@ -11,7 +12,7 @@ func Register() map[string]runner.HandlerFunc {
 	// Callback handlers: immediately reschedule the action so that
 	// the next action run re-enters the main handler (e.g. handleStart)
 	// which calls checkDeployerJob.
-	callbackContinue := func(rc *runner.RunContext) error {
+	callbackContinue := func(ctx context.Context, rc *runner.RunContext) error {
 		slog.Info("callback received, scheduling immediate action re-check",
 			"action", rc.ActionName(), "subject", rc.SubjectName())
 		rc.ContinueAction("0s")

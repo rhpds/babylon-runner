@@ -121,3 +121,5 @@ make build || exit 1
 echo "Starting babylon-runner... (Ctrl+C to stop)"
 # Can't exec here — need the trap to fire for cleanup.
 bin/babylon-runner
+
+exit 0

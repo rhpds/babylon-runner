@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -14,17 +15,17 @@ const (
 )
 
 // handleProvision routes a provision action based on the current state.
-func handleProvision(rc *runner.RunContext) error {
+func handleProvision(ctx context.Context, rc *runner.RunContext) error {
 	slog.Info("handling provision", "subject", rc.SubjectName(), "state", rc.CurrentState())
 
 	switch rc.CurrentState() {
 	case statePending:
-		return runProvision(rc)
+		return runProvision(ctx, rc)
 	case stateQueued:
-		return checkProvisionQueue(rc)
+		return checkProvisionQueue(ctx, rc)
 	case "provisioning":
 		if !rc.DeployerDisabled("provision") {
-			return checkDeployerJob(rc, "provision")
+			return checkDeployerJob(ctx, rc, "provision")
 		}
 		return nil
 	default:
@@ -35,8 +36,8 @@ func handleProvision(rc *runner.RunContext) error {
 
 // transitionToQueued updates the subject state to provision-queued and schedules
 // a follow-up poll after 30 seconds.
-func transitionToQueued(rc *runner.RunContext) error {
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+func transitionToQueued(ctx context.Context, rc *runner.RunContext) error {
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{"state": stateQueued},
@@ -65,7 +66,7 @@ func transitionToQueued(rc *runner.RunContext) error {
 
 // completeProvisionNoDeployer marks a provision as started when the deployer is
 // disabled. It records sandbox-provided provision_data if available.
-func completeProvisionNoDeployer(rc *runner.RunContext, sandboxResult *SandboxResult) error {
+func completeProvisionNoDeployer(ctx context.Context, rc *runner.RunContext, sandboxResult *SandboxResult) error {
 	ts := types.NowUTC()
 	specVars := map[string]interface{}{
 		"current_state": "started",
@@ -74,7 +75,7 @@ func completeProvisionNoDeployer(rc *runner.RunContext, sandboxResult *SandboxRe
 	if sandboxResult != nil && len(sandboxResult.SubjectVars) > 0 {
 		specVars["provision_data"] = sandboxResult.SubjectVars
 	}
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{
@@ -101,13 +102,13 @@ func completeProvisionNoDeployer(rc *runner.RunContext, sandboxResult *SandboxRe
 }
 
 // runProvision initiates the provisioning workflow.
-func runProvision(rc *runner.RunContext) error {
+func runProvision(ctx context.Context, rc *runner.RunContext) error {
 	// Set startTimestamp if not already set.
 	actions := rc.StatusActions()
 	provision := types.GetNestedMap(actions, "provision")
 	if provision == nil || provision["startTimestamp"] == nil {
 		ts := types.NowUTC()
-		if err := rc.SubjectUpdate(types.SubjectPatch{
+		if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 			Patch: types.PatchBody{
 				Status: map[string]interface{}{
 					"actions": map[string]interface{}{
@@ -126,16 +127,16 @@ func runProvision(rc *runner.RunContext) error {
 	var sandboxResult *SandboxResult
 	if rc.SandboxAPIInUse() {
 		var err error
-		sandboxResult, err = sandboxGet(rc, "provision")
+		sandboxResult, err = sandboxGet(ctx, rc, "provision")
 		if err != nil {
 			slog.Error("runProvision: sandbox get error", "subject", rc.SubjectName(), "error", err)
-			return handleProvisionError(rc)
+			return handleProvisionError(ctx, rc)
 		}
 		switch sandboxResult.Status {
 		case "error":
-			return handleProvisionError(rc)
+			return handleProvisionError(ctx, rc)
 		case "queued":
-			return transitionToQueued(rc)
+			return transitionToQueued(ctx, rc)
 		}
 	}
 
@@ -145,9 +146,9 @@ func runProvision(rc *runner.RunContext) error {
 		if sandboxResult != nil {
 			dynamicJobVars = sandboxResult.DynamicVars
 		}
-		if err := launchTowerJob(rc, "provision", "provisioning", nil, dynamicJobVars); err != nil {
+		if err := launchTowerJob(ctx, rc, "provision", "provisioning", nil, dynamicJobVars); err != nil {
 			slog.Error("runProvision: tower launch failed", "subject", rc.SubjectName(), "error", err)
-			return handleProvisionError(rc)
+			return handleProvisionError(ctx, rc)
 		}
 		rc.ContinueAction(rc.TowerPollIntervals[0])
 		return nil
@@ -155,14 +156,14 @@ func runProvision(rc *runner.RunContext) error {
 
 	// Deployer disabled and sandbox API in use: mark as started immediately.
 	if rc.SandboxAPIInUse() {
-		return completeProvisionNoDeployer(rc, sandboxResult)
+		return completeProvisionNoDeployer(ctx, rc, sandboxResult)
 	}
 
 	return nil
 }
 
 // handleProvisionComplete finalizes a successful provision.
-func handleProvisionComplete(rc *runner.RunContext, provisionData, messageBody, messages interface{}) error {
+func handleProvisionComplete(ctx context.Context, rc *runner.RunContext, provisionData, messageBody, messages interface{}) error {
 	slog.Info("provision complete", "subject", rc.SubjectName())
 	ts := types.NowUTC()
 
@@ -180,7 +181,7 @@ func handleProvisionComplete(rc *runner.RunContext, provisionData, messageBody, 
 		vars["provision_messages"] = messages
 	}
 
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{
@@ -214,10 +215,10 @@ func handleProvisionComplete(rc *runner.RunContext, provisionData, messageBody, 
 }
 
 // handleProvisionError marks a provision as errored (transient failure).
-func handleProvisionError(rc *runner.RunContext) error {
+func handleProvisionError(ctx context.Context, rc *runner.RunContext) error {
 	ts := types.NowUTC()
 
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{
@@ -253,7 +254,7 @@ func handleProvisionError(rc *runner.RunContext) error {
 }
 
 // handleProvisionFailed marks a provision as permanently failed.
-func handleProvisionFailed(rc *runner.RunContext) error {
+func handleProvisionFailed(ctx context.Context, rc *runner.RunContext) error {
 	ts := types.NowUTC()
 
 	jobVars := rc.JobVars()
@@ -269,7 +270,7 @@ func handleProvisionFailed(rc *runner.RunContext) error {
 	jv["agnosticd_collect_forensics"] = true
 	vars["job_vars"] = jv
 
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{
@@ -302,10 +303,10 @@ func handleProvisionFailed(rc *runner.RunContext) error {
 }
 
 // handleProvisionCanceled marks a provision as canceled.
-func handleProvisionCanceled(rc *runner.RunContext) error {
+func handleProvisionCanceled(ctx context.Context, rc *runner.RunContext) error {
 	ts := types.NowUTC()
 
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{
@@ -383,29 +384,28 @@ func buildDequeuedPatch(rc *runner.RunContext, placement map[string]interface{},
 
 // checkProvisionQueue checks whether a queued provision can proceed
 // by polling the sandbox API placement status.
-func checkProvisionQueue(rc *runner.RunContext) error {
+func checkProvisionQueue(ctx context.Context, rc *runner.RunContext) error {
 	uuid := rc.UUID()
 	if uuid == "" {
-		return handleProvisionError(rc)
+		return handleProvisionError(ctx, rc)
 	}
 
 	client, err := getSandboxClient(rc)
 	if err != nil {
 		slog.Error("checkProvisionQueue: client creation failed", "subject", rc.SubjectName(), "error", err)
-		return handleProvisionError(rc)
+		return handleProvisionError(ctx, rc)
 	}
 
-	ctx := rc.Ctx
 	placement, statusCode, err := client.GetPlacement(ctx, uuid)
 	if err != nil {
 		slog.Error("checkProvisionQueue: get placement failed", "subject", rc.SubjectName(), "error", err)
-		return handleProvisionError(rc)
+		return handleProvisionError(ctx, rc)
 	}
 
 	// 404 or error status -> provision error.
 	if statusCode == http.StatusNotFound {
 		slog.Warn("checkProvisionQueue: placement not found", "subject", rc.SubjectName())
-		return handleProvisionError(rc)
+		return handleProvisionError(ctx, rc)
 	}
 
 	placementStatus, _ := placement["status"].(string)
@@ -413,11 +413,11 @@ func checkProvisionQueue(rc *runner.RunContext) error {
 	switch placementStatus {
 	case "error":
 		slog.Error("checkProvisionQueue: placement error", "subject", rc.SubjectName())
-		return handleProvisionError(rc)
+		return handleProvisionError(ctx, rc)
 
 	case "queued":
 		// Still queued, update status and continue polling.
-		if err := rc.SubjectUpdate(types.SubjectPatch{
+		if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 			Patch: types.PatchBody{
 				Status: map[string]interface{}{
 					"sandboxAPIJobs": map[string]interface{}{
@@ -438,9 +438,9 @@ func checkProvisionQueue(rc *runner.RunContext) error {
 	default:
 		// Success: build dequeued patch, update subject, and restart provision.
 		patch := buildDequeuedPatch(rc, placement, placementStatus)
-		if err := rc.SubjectUpdate(types.SubjectPatch{Patch: patch}); err != nil {
+		if err := rc.SubjectUpdate(ctx, types.SubjectPatch{Patch: patch}); err != nil {
 			return err
 		}
-		return runProvision(rc)
+		return runProvision(ctx, rc)
 	}
 }

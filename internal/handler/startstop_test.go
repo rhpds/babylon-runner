@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"testing"
 
 	"github.com/rhpds/babylon-runner/internal/types"
@@ -26,7 +27,7 @@ func TestHandleStartDeployerDisabled(t *testing.T) {
 		},
 	}
 
-	if err := handleStart(rc); err != nil {
+	if err := handleStart(context.Background(), rc); err != nil {
 		t.Fatalf("handleStart returned error: %v", err)
 	}
 
@@ -78,7 +79,7 @@ func TestHandleStopDeployerDisabled(t *testing.T) {
 		},
 	}
 
-	if err := handleStop(rc); err != nil {
+	if err := handleStop(context.Background(), rc); err != nil {
 		t.Fatalf("handleStop returned error: %v", err)
 	}
 
@@ -117,7 +118,7 @@ func TestHandleStartComplete(t *testing.T) {
 
 	rc := newTestRunContext(t, server)
 
-	if err := handleStartComplete(rc); err != nil {
+	if err := handleStartComplete(context.Background(), rc); err != nil {
 		t.Fatalf("handleStartComplete returned error: %v", err)
 	}
 
@@ -180,7 +181,7 @@ func TestHandleStopComplete(t *testing.T) {
 		AWSSandboxed: true,
 	}
 
-	if err := handleStopComplete(rc); err != nil {
+	if err := handleStopComplete(context.Background(), rc); err != nil {
 		t.Fatalf("handleStopComplete returned error: %v", err)
 	}
 

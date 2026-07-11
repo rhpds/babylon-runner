@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/google/uuid"
@@ -58,14 +59,14 @@ func buildInitialJobVars(rc *runner.RunContext) map[string]interface{} {
 // newly created subject by setting cloud_provider, platform, uuid in
 // job_vars (matching Ansible's handle-event-create.yaml), then scheduling
 // the provision action.
-func handleEventCreate(rc *runner.RunContext) error {
+func handleEventCreate(ctx context.Context, rc *runner.RunContext) error {
 	slog.Info("handling create event", "subject", rc.SubjectName())
 
 	// Initialize subject if not already done.
 	if rc.CurrentState() == "" {
 		jobVarsPatch := buildInitialJobVars(rc)
 
-		if err := rc.SubjectUpdate(types.SubjectPatch{
+		if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 			Patch: types.PatchBody{
 				Metadata: &types.PatchMetadata{
 					Labels: map[string]string{
@@ -86,7 +87,7 @@ func handleEventCreate(rc *runner.RunContext) error {
 	}
 
 	slog.Info("scheduling provision action", "subject", rc.SubjectName())
-	return rc.ScheduleAction(types.ScheduleActionRequest{
+	return rc.ScheduleAction(ctx, types.ScheduleActionRequest{
 		Action: "provision",
 	})
 }

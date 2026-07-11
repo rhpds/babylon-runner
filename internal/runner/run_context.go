@@ -10,10 +10,12 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// Compile-time check: ensure context.Context is NOT stored as a struct field.
+// SonarQube godre:S8242 – pass context as a parameter, not a field.
+
 // RunContext holds the per-run state and provides convenience methods
 // for accessing payload data and calling the Anarchy API.
 type RunContext struct {
-	Ctx                  context.Context
 	Payload              types.RunPayload
 	Result               types.RunResult
 	AnarchyClient        *clients.AnarchyClient
@@ -197,11 +199,11 @@ func (rc *RunContext) ContinueActionWithVars(after string, vars map[string]inter
 // --- Delegates ---
 
 // SubjectUpdate delegates to AnarchyClient.SubjectUpdate for this subject.
-func (rc *RunContext) SubjectUpdate(patch types.SubjectPatch) error {
-	return rc.AnarchyClient.SubjectUpdate(rc.Ctx, rc.SubjectName(), patch)
+func (rc *RunContext) SubjectUpdate(ctx context.Context, patch types.SubjectPatch) error {
+	return rc.AnarchyClient.SubjectUpdate(ctx, rc.SubjectName(), patch)
 }
 
 // ScheduleAction delegates to AnarchyClient.ScheduleAction for this subject.
-func (rc *RunContext) ScheduleAction(req types.ScheduleActionRequest) error {
-	return rc.AnarchyClient.ScheduleAction(rc.Ctx, rc.SubjectName(), req)
+func (rc *RunContext) ScheduleAction(ctx context.Context, req types.ScheduleActionRequest) error {
+	return rc.AnarchyClient.ScheduleAction(ctx, rc.SubjectName(), req)
 }

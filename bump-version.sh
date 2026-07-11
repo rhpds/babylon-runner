@@ -63,3 +63,5 @@ git add helm/Chart.yaml
 git commit -m "Release $VERSION"
 git tag $VERSION
 git push origin $CURRENT_BRANCH $VERSION
+
+exit 0

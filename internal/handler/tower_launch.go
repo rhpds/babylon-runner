@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -45,7 +46,7 @@ func getDeployerEntryPoint(meta *types.Meta, action string) string {
 // getTowerClientForAction creates a TowerClient from the governor's
 // __meta__.ansible_controllers configuration. Returns the client, the
 // controller hostname, and any error.
-func getTowerClientForAction(rc *runner.RunContext) (*clients.TowerClient, string, error) {
+func getTowerClientForAction(ctx context.Context, rc *runner.RunContext) (*clients.TowerClient, string, error) {
 	if rc.TowerBaseURL != "" {
 		return clients.NewTowerClient(rc.TowerBaseURL, "", "", rc.TowerTLSConfig), "test-tower", nil
 	}
@@ -56,7 +57,7 @@ func getTowerClientForAction(rc *runner.RunContext) (*clients.TowerClient, strin
 	}
 
 	if meta.ControllerScheduler != nil && meta.ControllerScheduler.URL != "" {
-		selected, hostname, err := trySchedulerSelection(rc, meta)
+		selected, hostname, err := trySchedulerSelection(ctx, rc, meta)
 		if err != nil {
 			slog.Warn("controller-scheduler failed, falling back to local selection",
 				"error", err)
@@ -92,7 +93,7 @@ func getTowerClientForAction(rc *runner.RunContext) (*clients.TowerClient, strin
 	return rc.TowerClientPool.Get(hostname, username, password, rc.TowerTLSConfig), hostname, nil
 }
 
-func trySchedulerSelection(rc *runner.RunContext, meta *types.Meta) (*clients.TowerClient, string, error) {
+func trySchedulerSelection(ctx context.Context, rc *runner.RunContext, meta *types.Meta) (*clients.TowerClient, string, error) {
 	cs := meta.ControllerScheduler
 
 	apiKey, err := resolveSchedulerAPIKey(rc)
@@ -101,7 +102,7 @@ func trySchedulerSelection(rc *runner.RunContext, meta *types.Meta) (*clients.To
 	}
 
 	scheduler := clients.NewSchedulerClient(cs.URL, apiKey, rc.TowerTLSConfig)
-	resp, err := scheduler.Evaluate(rc.Ctx, clients.EvaluateRequest{
+	resp, err := scheduler.Evaluate(ctx, clients.EvaluateRequest{
 		RequireLabels: cs.RequireLabels,
 		PreferLabels:  cs.PreferLabels,
 		InstanceGroup: rc.ActionName(),
@@ -462,7 +463,7 @@ func resolveVaultCredentials(rc *runner.RunContext) map[string]string {
 // it also transitions labels and current_state. extraSpecVars are merged
 // into the subject spec.vars patch (e.g. check_status_state for status).
 // dynamicJobVars are sandbox vars with credentials, merged into Tower extra_vars.
-func launchTowerJob(rc *runner.RunContext, action, newState string, extraSpecVars, dynamicJobVars map[string]interface{}) error {
+func launchTowerJob(ctx context.Context, rc *runner.RunContext, action, newState string, extraSpecVars, dynamicJobVars map[string]interface{}) error {
 	meta := rc.Meta()
 
 	playbook := getDeployerEntryPoint(meta, action)
@@ -473,7 +474,7 @@ func launchTowerJob(rc *runner.RunContext, action, newState string, extraSpecVar
 		scmRef = meta.Deployer.SCMRef
 	}
 
-	tc, hostname, err := getTowerClientForAction(rc)
+	tc, hostname, err := getTowerClientForAction(ctx, rc)
 	if err != nil {
 		return fmt.Errorf("get tower client: %w", err)
 	}
@@ -509,7 +510,7 @@ func launchTowerJob(rc *runner.RunContext, action, newState string, extraSpecVar
 
 	slog.Info("launching tower job", "action", action, "subject", rc.SubjectName(), "entryPoint", playbook)
 
-	jobID, err := tc.LaunchJob(rc.Ctx, config)
+	jobID, err := tc.LaunchJob(ctx, config)
 	if err != nil {
 		return fmt.Errorf("launch tower job: %w", err)
 	}
@@ -554,12 +555,12 @@ func launchTowerJob(rc *runner.RunContext, action, newState string, extraSpecVar
 		}
 	}
 
-	return rc.SubjectUpdate(types.SubjectPatch{Patch: patchBody})
+	return rc.SubjectUpdate(ctx, types.SubjectPatch{Patch: patchBody})
 }
 
 // cancelTowerJob cancels a running Tower job for the given action.
 // Errors are logged but not returned to avoid failing the caller.
-func cancelTowerJob(rc *runner.RunContext, action string) {
+func cancelTowerJob(ctx context.Context, rc *runner.RunContext, action string) {
 	towerJobs := rc.StatusTowerJobs()
 	jobInfo := types.GetNestedMap(towerJobs, action)
 	if jobInfo == nil {
@@ -589,13 +590,13 @@ func cancelTowerJob(rc *runner.RunContext, action string) {
 		return
 	}
 
-	token, err := tc.GetToken(rc.Ctx)
+	token, err := tc.GetToken(ctx)
 	if err != nil {
 		slog.Error("cancelTowerJob: cannot get oauth token", "error", err)
 		return
 	}
 
-	if err := tc.CancelJob(rc.Ctx, token, int(jobIDFloat)); err != nil {
+	if err := tc.CancelJob(ctx, token, int(jobIDFloat)); err != nil {
 		slog.Error("cancelTowerJob: failed to cancel job", "job", int(jobIDFloat), "error", err)
 	} else {
 		slog.Info("cancelTowerJob: canceled job", "job", int(jobIDFloat), "action", action)
@@ -604,7 +605,7 @@ func cancelTowerJob(rc *runner.RunContext, action string) {
 
 // cancelAllIncompleteTowerJobs cancels every tower job in
 // subject.status.towerJobs that has no completeTimestamp.
-func cancelAllIncompleteTowerJobs(rc *runner.RunContext) {
+func cancelAllIncompleteTowerJobs(ctx context.Context, rc *runner.RunContext) {
 	towerJobs := rc.StatusTowerJobs()
 	if towerJobs == nil {
 		return
@@ -613,7 +614,7 @@ func cancelAllIncompleteTowerJobs(rc *runner.RunContext) {
 		if _, ok := v.(map[string]interface{}); !ok {
 			continue
 		}
-		cancelTowerJob(rc, action)
+		cancelTowerJob(ctx, rc, action)
 	}
 }
 

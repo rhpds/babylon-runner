@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/rhpds/babylon-runner/internal/runner"
@@ -10,11 +11,11 @@ import (
 // handleEventDelete handles the "delete" subject event. It decides whether
 // to schedule a destroy action or finish immediately depending on whether
 // a provision tower job exists and a destroy action is available.
-func handleEventDelete(rc *runner.RunContext) error {
+func handleEventDelete(ctx context.Context, rc *runner.RunContext) error {
 	slog.Info("handling delete event", "subject", rc.SubjectName())
 
 	// Cancel all incomplete tower jobs before proceeding.
-	cancelAllIncompleteTowerJobs(rc)
+	cancelAllIncompleteTowerJobs(ctx, rc)
 
 	// Check if a provision tower job exists.
 	hasProvisionJob := false
@@ -39,15 +40,15 @@ func handleEventDelete(rc *runner.RunContext) error {
 	deployerEnabled := !rc.DeployerDisabled("destroy")
 
 	if hasProvisionJob && hasDestroyAction && deployerEnabled {
-		return handleEventDeleteWithDestroy(rc)
+		return handleEventDeleteWithDestroy(ctx, rc)
 	}
-	return handleEventDeleteWithoutDestroy(rc)
+	return handleEventDeleteWithoutDestroy(ctx, rc)
 }
 
 // handleEventDeleteWithDestroy schedules a destroy action and updates
 // the subject state accordingly.
-func handleEventDeleteWithDestroy(rc *runner.RunContext) error {
-	err := rc.ScheduleAction(types.ScheduleActionRequest{
+func handleEventDeleteWithDestroy(ctx context.Context, rc *runner.RunContext) error {
+	err := rc.ScheduleAction(ctx, types.ScheduleActionRequest{
 		Action: "destroy",
 		Cancel: []string{"start", "stop", "update"},
 	})
@@ -55,7 +56,7 @@ func handleEventDeleteWithDestroy(rc *runner.RunContext) error {
 		return err
 	}
 
-	return rc.SubjectUpdate(types.SubjectPatch{
+	return rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Spec: &types.PatchSpec{
 				Vars: map[string]interface{}{
@@ -93,15 +94,15 @@ func sandboxDestroyCatchAll(rc *runner.RunContext) bool {
 
 // handleEventDeleteWithoutDestroy marks the subject as destroyed and
 // finishes the action immediately.
-func handleEventDeleteWithoutDestroy(rc *runner.RunContext) error {
+func handleEventDeleteWithoutDestroy(ctx context.Context, rc *runner.RunContext) error {
 	// Sandbox cleanup: release placement if catch_all is enabled.
 	if rc.SandboxAPIInUse() && sandboxDestroyCatchAll(rc) && rc.UUID() != "" {
-		if err := sandboxCleanup(rc); err != nil {
+		if err := sandboxCleanup(ctx, rc); err != nil {
 			slog.Error("handleEventDeleteWithoutDestroy: sandbox cleanup error", "error", err)
 		}
 	}
 
-	err := rc.SubjectUpdate(types.SubjectPatch{
+	err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Spec: &types.PatchSpec{
 				Vars: map[string]interface{}{

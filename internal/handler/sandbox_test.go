@@ -177,7 +177,7 @@ func TestSandboxGet(t *testing.T) {
 
 		rc := newTestRunContext(t, anarchyServer)
 
-		_, err := sandboxGet(rc, "provision")
+		_, err := sandboxGet(context.Background(), rc, "provision")
 		if err == nil {
 			t.Fatal("expected error when no uuid, got nil")
 		}
@@ -223,7 +223,7 @@ func TestSandboxGet(t *testing.T) {
 		rc := newTestRunContext(t, anarchyServer)
 		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
 
-		result, err := sandboxGet(rc, "provision")
+		result, err := sandboxGet(context.Background(), rc, "provision")
 		if err != nil {
 			t.Fatalf("sandboxGet() error = %v", err)
 		}
@@ -288,7 +288,7 @@ func TestSandboxGet(t *testing.T) {
 			},
 		}
 
-		result, err := sandboxGet(rc, "provision")
+		result, err := sandboxGet(context.Background(), rc, "provision")
 		if err != nil {
 			t.Fatalf("sandboxGet() error = %v", err)
 		}
@@ -315,7 +315,7 @@ func TestSandboxGet(t *testing.T) {
 		rc := newTestRunContext(t, anarchyServer)
 		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
 
-		result, err := sandboxGet(rc, "destroy")
+		result, err := sandboxGet(context.Background(), rc, "destroy")
 		if err != nil {
 			t.Fatalf("sandboxGet() error = %v", err)
 		}
@@ -345,7 +345,7 @@ func TestSandboxGet(t *testing.T) {
 		rc := newTestRunContext(t, anarchyServer)
 		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
 
-		result, err := sandboxGet(rc, "provision")
+		result, err := sandboxGet(context.Background(), rc, "provision")
 		if err != nil {
 			t.Fatalf("sandboxGet() error = %v", err)
 		}
@@ -375,7 +375,7 @@ func TestSandboxGet(t *testing.T) {
 		rc := newTestRunContext(t, anarchyServer)
 		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
 
-		result, err := sandboxGet(rc, "provision")
+		result, err := sandboxGet(context.Background(), rc, "provision")
 		if err != nil {
 			t.Fatalf("sandboxGet() error = %v", err)
 		}
@@ -433,7 +433,7 @@ func TestSandboxBook(t *testing.T) {
 		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
 
 		client := newTestSandboxClient(sandboxServer.URL)
-		result, err := sandboxBook(rc, client)
+		result, err := sandboxBook(context.Background(), rc, client)
 		if err != nil {
 			t.Fatalf("sandboxBook() error = %v", err)
 		}
@@ -474,7 +474,7 @@ func TestSandboxBook(t *testing.T) {
 		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
 
 		client := newTestSandboxClient(sandboxServer.URL)
-		result, err := sandboxBook(rc, client)
+		result, err := sandboxBook(context.Background(), rc, client)
 		if err != nil {
 			t.Fatalf("sandboxBook() error = %v", err)
 		}
@@ -505,7 +505,7 @@ func TestSandboxBook(t *testing.T) {
 		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
 
 		client := newTestSandboxClient(sandboxServer.URL)
-		result, err := sandboxBook(rc, client)
+		result, err := sandboxBook(context.Background(), rc, client)
 		if err != nil {
 			t.Fatalf("sandboxBook() error = %v", err)
 		}
@@ -536,7 +536,7 @@ func TestSandboxBook(t *testing.T) {
 		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
 
 		client := newTestSandboxClient(sandboxServer.URL)
-		result, err := sandboxBook(rc, client)
+		result, err := sandboxBook(context.Background(), rc, client)
 		if err == nil {
 			t.Fatal("expected error for status 400, got nil")
 		}
@@ -556,7 +556,7 @@ func TestSandboxCleanup(t *testing.T) {
 
 		rc := newTestRunContext(t, anarchyServer)
 
-		err := sandboxCleanup(rc)
+		err := sandboxCleanup(context.Background(), rc)
 		if err != nil {
 			t.Fatalf("sandboxCleanup() error = %v, want nil", err)
 		}
@@ -571,7 +571,7 @@ func TestSandboxCleanup(t *testing.T) {
 			"uuid": "test-uuid",
 		}
 
-		err := sandboxCleanup(rc)
+		err := sandboxCleanup(context.Background(), rc)
 		if err != nil {
 			t.Fatalf("sandboxCleanup() error = %v, want nil", err)
 		}
@@ -598,7 +598,7 @@ func TestSandboxCleanup(t *testing.T) {
 		rc := newTestRunContext(t, anarchyServer)
 		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
 
-		err := sandboxCleanup(rc)
+		err := sandboxCleanup(context.Background(), rc)
 		if err != nil {
 			t.Fatalf("sandboxCleanup() error = %v", err)
 		}
@@ -627,7 +627,7 @@ func TestSandboxCleanup(t *testing.T) {
 		rc := newTestRunContext(t, anarchyServer)
 		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
 
-		err := sandboxCleanup(rc)
+		err := sandboxCleanup(context.Background(), rc)
 		if err == nil {
 			t.Fatal("expected error when release fails, got nil")
 		}
@@ -646,7 +646,7 @@ func TestSandboxStart(t *testing.T) {
 
 		rc := newTestRunContext(t, anarchyServer)
 
-		err := sandboxStart(rc)
+		err := sandboxStart(context.Background(), rc)
 		if err == nil {
 			t.Fatal("expected error when no uuid, got nil")
 		}
@@ -679,7 +679,7 @@ func TestSandboxStart(t *testing.T) {
 		rc := newTestRunContext(t, anarchyServer)
 		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
 
-		err := sandboxStart(rc)
+		err := sandboxStart(context.Background(), rc)
 		if err != nil {
 			t.Fatalf("sandboxStart() error = %v", err)
 		}
@@ -704,7 +704,7 @@ func TestSandboxStart(t *testing.T) {
 		rc := newTestRunContext(t, anarchyServer)
 		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
 
-		err := sandboxStart(rc)
+		err := sandboxStart(context.Background(), rc)
 		if err != nil {
 			t.Fatalf("sandboxStart() error = %v", err)
 		}
@@ -724,7 +724,7 @@ func TestSandboxStart(t *testing.T) {
 		rc := newTestRunContext(t, anarchyServer)
 		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
 
-		err := sandboxStart(rc)
+		err := sandboxStart(context.Background(), rc)
 		if err == nil {
 			t.Fatal("expected error when login fails, got nil")
 		}
@@ -740,7 +740,7 @@ func TestSandboxStop(t *testing.T) {
 
 		rc := newTestRunContext(t, anarchyServer)
 
-		err := sandboxStop(rc)
+		err := sandboxStop(context.Background(), rc)
 		if err == nil {
 			t.Fatal("expected error when no uuid, got nil")
 		}
@@ -773,7 +773,7 @@ func TestSandboxStop(t *testing.T) {
 		rc := newTestRunContext(t, anarchyServer)
 		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
 
-		err := sandboxStop(rc)
+		err := sandboxStop(context.Background(), rc)
 		if err != nil {
 			t.Fatalf("sandboxStop() error = %v", err)
 		}
@@ -793,7 +793,7 @@ func TestSandboxStop(t *testing.T) {
 		rc := newTestRunContext(t, anarchyServer)
 		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
 
-		err := sandboxStop(rc)
+		err := sandboxStop(context.Background(), rc)
 		if err == nil {
 			t.Fatal("expected error when login fails, got nil")
 		}

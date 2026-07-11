@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -141,7 +142,7 @@ func TestIntegrationProvisionWithTowerJob(t *testing.T) {
 	withTowerServer(rc, towerServer)
 	rc.Payload.Subject.Spec.Vars.CurrentState = "provision-pending"
 
-	if err := handleProvision(rc); err != nil {
+	if err := handleProvision(context.Background(), rc); err != nil {
 		t.Fatalf("handleProvision returned error: %v", err)
 	}
 
@@ -244,7 +245,7 @@ func TestIntegrationProvisionWithSandboxAndTower(t *testing.T) {
 	withTowerServerAndMeta(rc, towerServer)
 	rc.Payload.Subject.Spec.Vars.CurrentState = "provision-pending"
 
-	if err := handleProvision(rc); err != nil {
+	if err := handleProvision(context.Background(), rc); err != nil {
 		t.Fatalf("handleProvision returned error: %v", err)
 	}
 
@@ -364,7 +365,7 @@ func TestIntegrationProvisionSandboxQueued(t *testing.T) {
 	withTowerServerAndMeta(rc, towerServer)
 	rc.Payload.Subject.Spec.Vars.CurrentState = "provision-pending"
 
-	if err := handleProvision(rc); err != nil {
+	if err := handleProvision(context.Background(), rc); err != nil {
 		t.Fatalf("handleProvision returned error: %v", err)
 	}
 
@@ -442,7 +443,7 @@ func TestIntegrationCheckProvisionQueueSuccess(t *testing.T) {
 	withTowerServerAndMeta(rc, towerServer)
 	rc.Payload.Subject.Spec.Vars.CurrentState = "provision-queued"
 
-	if err := handleProvision(rc); err != nil {
+	if err := handleProvision(context.Background(), rc); err != nil {
 		t.Fatalf("handleProvision returned error: %v", err)
 	}
 
@@ -529,7 +530,7 @@ func TestIntegrationCheckProvisionQueueStillQueued(t *testing.T) {
 	configureSandboxRC(t, rc, sandboxServer.URL)
 	rc.Payload.Subject.Spec.Vars.CurrentState = "provision-queued"
 
-	if err := handleProvision(rc); err != nil {
+	if err := handleProvision(context.Background(), rc); err != nil {
 		t.Fatalf("handleProvision returned error: %v", err)
 	}
 
@@ -592,7 +593,7 @@ func TestIntegrationDestroyWithTowerJob(t *testing.T) {
 	withTowerServer(rc, towerServer)
 	rc.Payload.Subject.Spec.Vars.CurrentState = "destroy-pending"
 
-	if err := handleDestroy(rc); err != nil {
+	if err := handleDestroy(context.Background(), rc); err != nil {
 		t.Fatalf("handleDestroy returned error: %v", err)
 	}
 
@@ -664,7 +665,7 @@ func TestIntegrationDestroyCompleteWithSandboxCleanup(t *testing.T) {
 	rc := newTestRunContext(t, server)
 	configureSandboxRC(t, rc, sandboxServer.URL)
 
-	if err := handleDestroyComplete(rc); err != nil {
+	if err := handleDestroyComplete(context.Background(), rc); err != nil {
 		t.Fatalf("handleDestroyComplete returned error: %v", err)
 	}
 
@@ -719,7 +720,7 @@ func TestIntegrationStartWithSandboxDeployerDisabled(t *testing.T) {
 		},
 	}
 
-	if err := handleStart(rc); err != nil {
+	if err := handleStart(context.Background(), rc); err != nil {
 		t.Fatalf("handleStart returned error: %v", err)
 	}
 
@@ -796,7 +797,7 @@ func TestIntegrationStopWithTowerJob(t *testing.T) {
 	withTowerServerAndMeta(rc, towerServer)
 	rc.Payload.Subject.Spec.Vars.CurrentState = "started"
 
-	if err := handleStop(rc); err != nil {
+	if err := handleStop(context.Background(), rc); err != nil {
 		t.Fatalf("handleStop returned error: %v", err)
 	}
 
@@ -866,7 +867,7 @@ func TestIntegrationStatusWithTowerJob(t *testing.T) {
 	withTowerServer(rc, towerServer)
 	rc.Payload.Subject.Spec.Vars.CheckStatusState = "pending"
 
-	if err := handleStatus(rc); err != nil {
+	if err := handleStatus(context.Background(), rc); err != nil {
 		t.Fatalf("handleStatus returned error: %v", err)
 	}
 
@@ -942,7 +943,7 @@ func TestIntegrationEventDeleteWithCancelJobs(t *testing.T) {
 		},
 	}
 
-	if err := handleEventDelete(rc); err != nil {
+	if err := handleEventDelete(context.Background(), rc); err != nil {
 		t.Fatalf("handleEventDelete returned error: %v", err)
 	}
 
@@ -1042,7 +1043,7 @@ func TestIntegrationExtractProvisionDataFromJob(t *testing.T) {
 		},
 	}
 
-	err := checkDeployerJob(rc, "provision")
+	err := checkDeployerJob(context.Background(), rc, "provision")
 	if err != nil {
 		t.Fatalf("checkDeployerJob returned error: %v", err)
 	}
@@ -1251,7 +1252,7 @@ func TestIntegrationDestroyWithCancelProvisionJob(t *testing.T) {
 		},
 	}
 
-	if err := handleDestroy(rc); err != nil {
+	if err := handleDestroy(context.Background(), rc); err != nil {
 		t.Fatalf("handleDestroy returned error: %v", err)
 	}
 
@@ -1320,7 +1321,7 @@ func TestIntegrationProvisionDeployerDisabledSandbox(t *testing.T) {
 		},
 	}
 
-	if err := handleProvision(rc); err != nil {
+	if err := handleProvision(context.Background(), rc); err != nil {
 		t.Fatalf("handleProvision returned error: %v", err)
 	}
 
@@ -1394,7 +1395,7 @@ func TestIntegrationEventDeleteWithoutDestroy(t *testing.T) {
 	rc := newTestRunContext(t, server)
 	configureSandboxRC(t, rc, sandboxServer.URL)
 
-	if err := handleEventDelete(rc); err != nil {
+	if err := handleEventDelete(context.Background(), rc); err != nil {
 		t.Fatalf("handleEventDelete returned error: %v", err)
 	}
 
@@ -1451,7 +1452,7 @@ func TestIntegrationDestroyErrorCatchAll(t *testing.T) {
 		},
 	}
 
-	if err := handleDestroy(rc); err != nil {
+	if err := handleDestroy(context.Background(), rc); err != nil {
 		t.Fatalf("handleDestroy returned error: %v", err)
 	}
 
@@ -1490,7 +1491,7 @@ func TestIntegrationStopDeployerDisabledSandbox(t *testing.T) {
 	}
 	rc.Payload.Subject.Spec.Vars.CurrentState = "started"
 
-	if err := handleStop(rc); err != nil {
+	if err := handleStop(context.Background(), rc); err != nil {
 		t.Fatalf("handleStop returned error: %v", err)
 	}
 

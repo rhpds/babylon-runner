@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"log/slog"
 	"reflect"
 
@@ -40,9 +41,9 @@ func shouldScheduleStatus(checkStatusState, currentTimestamp, previousTimestamp 
 }
 
 // scheduleUpdateAction patches the subject state and schedules the given action.
-func scheduleUpdateAction(rc *runner.RunContext, action string) error {
+func scheduleUpdateAction(ctx context.Context, rc *runner.RunContext, action string) error {
 	pendingState := action + "-pending"
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{
@@ -61,15 +62,15 @@ func scheduleUpdateAction(rc *runner.RunContext, action string) error {
 	}
 
 	slog.Info("scheduling action from update event", "action", action, "subject", rc.SubjectName())
-	return rc.ScheduleAction(types.ScheduleActionRequest{
+	return rc.ScheduleAction(ctx, types.ScheduleActionRequest{
 		Action: action,
 		Cancel: []string{"start", "stop"},
 	})
 }
 
 // scheduleStatusCheck patches check_status_state and schedules the status action.
-func scheduleStatusCheck(rc *runner.RunContext) error {
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+func scheduleStatusCheck(ctx context.Context, rc *runner.RunContext) error {
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Spec: &types.PatchSpec{
 				Vars: map[string]interface{}{
@@ -82,7 +83,7 @@ func scheduleStatusCheck(rc *runner.RunContext) error {
 		return err
 	}
 
-	return rc.ScheduleAction(types.ScheduleActionRequest{
+	return rc.ScheduleAction(ctx, types.ScheduleActionRequest{
 		Action: "status",
 	})
 }
@@ -90,7 +91,7 @@ func scheduleStatusCheck(rc *runner.RunContext) error {
 // handleEventUpdate handles the "update" subject event. It determines
 // whether an action (update/start/stop) is needed based on state and
 // job_vars changes, and checks for status requests.
-func handleEventUpdate(rc *runner.RunContext) error {
+func handleEventUpdate(ctx context.Context, rc *runner.RunContext) error {
 	slog.Info("handling update event", "subject", rc.SubjectName(), "currentState", rc.CurrentState(), "desiredState", rc.DesiredState())
 
 	currentJobVars := rc.JobVars()
@@ -109,7 +110,7 @@ func handleEventUpdate(rc *runner.RunContext) error {
 	if action != "" {
 		if govActions := rc.GovernorActions(); govActions != nil {
 			if _, ok := govActions[action]; ok {
-				if err := scheduleUpdateAction(rc, action); err != nil {
+				if err := scheduleUpdateAction(ctx, rc, action); err != nil {
 					return err
 				}
 			}
@@ -136,7 +137,7 @@ func handleEventUpdate(rc *runner.RunContext) error {
 		rc.Payload.Subject.Spec.Vars.GetString("check_status_request_timestamp"),
 		previousTimestamp,
 	) {
-		return scheduleStatusCheck(rc)
+		return scheduleStatusCheck(ctx, rc)
 	}
 
 	return nil

@@ -70,7 +70,7 @@ func sandboxLoginToken(rc *runner.RunContext) string {
 //  3. If error status -> return error result
 //  4. If found with resources -> extract vars, update subject
 //  5. If action is "provision" and not found -> book new placement
-func sandboxGet(rc *runner.RunContext, action string) (*SandboxResult, error) {
+func sandboxGet(ctx context.Context, rc *runner.RunContext, action string) (*SandboxResult, error) {
 	uuid := rc.UUID()
 	if uuid == "" {
 		return nil, fmt.Errorf("no uuid in job_vars")
@@ -81,7 +81,7 @@ func sandboxGet(rc *runner.RunContext, action string) (*SandboxResult, error) {
 		return nil, err
 	}
 
-	placement, statusCode, err := client.GetPlacement(rc.Ctx, uuid)
+	placement, statusCode, err := client.GetPlacement(ctx, uuid)
 	if err != nil {
 		return nil, fmt.Errorf("get placement: %w", err)
 	}
@@ -89,7 +89,7 @@ func sandboxGet(rc *runner.RunContext, action string) (*SandboxResult, error) {
 	// Not found -- book if provision action.
 	if statusCode == http.StatusNotFound {
 		if action == "provision" && sandboxLoginToken(rc) != "" {
-			return sandboxBook(rc, client)
+			return sandboxBook(ctx, rc, client)
 		}
 		return &SandboxResult{Status: "not-found"}, nil
 	}
@@ -109,7 +109,7 @@ func sandboxGet(rc *runner.RunContext, action string) (*SandboxResult, error) {
 	// Extract vars with creds for Tower extra_vars.
 	dynamicVars := extractSandboxVars(placement, true)
 
-	if err := updateSubjectSandboxVars(rc, subjectVars, labels); err != nil {
+	if err := updateSubjectSandboxVars(ctx, rc, subjectVars, labels); err != nil {
 		return nil, fmt.Errorf("update subject with sandbox vars: %w", err)
 	}
 
@@ -125,7 +125,7 @@ func sandboxGet(rc *runner.RunContext, action string) (*SandboxResult, error) {
 // sandboxBook books a new placement via the sandbox API.
 // The client is passed from the caller (sandboxGet) so the same
 // token cache is reused.
-func sandboxBook(rc *runner.RunContext, client *clients.SandboxAPIClient) (*SandboxResult, error) {
+func sandboxBook(ctx context.Context, rc *runner.RunContext, client *clients.SandboxAPIClient) (*SandboxResult, error) {
 	uuid := rc.UUID()
 	guid := rc.GUID()
 	meta := rc.Meta()
@@ -184,7 +184,6 @@ func sandboxBook(rc *runner.RunContext, client *clients.SandboxAPIClient) (*Sand
 		reqBody["resources"] = injectVarAnnotations(resolved)
 	}
 
-	ctx := rc.Ctx
 	result, statusCode, err := client.BookPlacement(ctx, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("book placement: %w", err)
@@ -210,7 +209,7 @@ func sandboxBook(rc *runner.RunContext, client *clients.SandboxAPIClient) (*Sand
 }
 
 // sandboxCleanup releases the sandbox placement.
-func sandboxCleanup(rc *runner.RunContext) error {
+func sandboxCleanup(ctx context.Context, rc *runner.RunContext) error {
 	uuid := rc.UUID()
 	if uuid == "" {
 		slog.Warn("sandboxCleanup: no uuid, skipping")
@@ -228,7 +227,6 @@ func sandboxCleanup(rc *runner.RunContext) error {
 		return fmt.Errorf("sandbox cleanup: %w", err)
 	}
 
-	ctx := rc.Ctx
 	if err := client.ReleasePlacement(ctx, uuid); err != nil {
 		return fmt.Errorf("release placement: %w", err)
 	}
@@ -238,7 +236,7 @@ func sandboxCleanup(rc *runner.RunContext) error {
 }
 
 // sandboxStart starts the sandbox placement and polls for completion.
-func sandboxStart(rc *runner.RunContext) error {
+func sandboxStart(ctx context.Context, rc *runner.RunContext) error {
 	uuid := rc.UUID()
 	if uuid == "" {
 		return fmt.Errorf("no uuid for sandbox start")
@@ -249,7 +247,6 @@ func sandboxStart(rc *runner.RunContext) error {
 		return err
 	}
 
-	ctx := rc.Ctx
 	result, err := client.StartPlacement(ctx, uuid)
 	if err != nil {
 		return fmt.Errorf("start placement: %w", err)
@@ -263,7 +260,7 @@ func sandboxStart(rc *runner.RunContext) error {
 	}
 
 	// Update subject status with request info.
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{"state": "starting"},
@@ -286,7 +283,7 @@ func sandboxStart(rc *runner.RunContext) error {
 }
 
 // sandboxStop stops the sandbox placement and polls for completion.
-func sandboxStop(rc *runner.RunContext) error {
+func sandboxStop(ctx context.Context, rc *runner.RunContext) error {
 	uuid := rc.UUID()
 	if uuid == "" {
 		return fmt.Errorf("no uuid for sandbox stop")
@@ -297,7 +294,6 @@ func sandboxStop(rc *runner.RunContext) error {
 		return err
 	}
 
-	ctx := rc.Ctx
 	result, err := client.StopPlacement(ctx, uuid)
 	if err != nil {
 		return fmt.Errorf("stop placement: %w", err)
@@ -311,7 +307,7 @@ func sandboxStop(rc *runner.RunContext) error {
 	}
 
 	// Update subject status with request info.
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{"state": "stopping"},
@@ -361,7 +357,7 @@ func pollSandboxRequest(ctx context.Context, client *clients.SandboxAPIClient, r
 
 // updateSubjectSandboxVars patches the subject with sandbox-extracted labels
 // and merges non-secret vars into job_vars. It is a no-op when both maps are empty.
-func updateSubjectSandboxVars(rc *runner.RunContext, subjectVars map[string]interface{}, labels map[string]string) error {
+func updateSubjectSandboxVars(ctx context.Context, rc *runner.RunContext, subjectVars map[string]interface{}, labels map[string]string) error {
 	if len(subjectVars) == 0 && len(labels) == 0 {
 		return nil
 	}
@@ -381,7 +377,7 @@ func updateSubjectSandboxVars(rc *runner.RunContext, subjectVars map[string]inte
 			},
 		}
 	}
-	return rc.SubjectUpdate(types.SubjectPatch{Patch: patch})
+	return rc.SubjectUpdate(ctx, types.SubjectPatch{Patch: patch})
 }
 
 // copyWithInjectedAnnotations returns a shallow copy of a sandbox resource

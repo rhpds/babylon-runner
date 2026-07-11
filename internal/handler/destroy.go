@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/rhpds/babylon-runner/internal/runner"
@@ -8,7 +9,7 @@ import (
 )
 
 // handleDestroy routes a destroy action based on the current state.
-func handleDestroy(rc *runner.RunContext) error {
+func handleDestroy(ctx context.Context, rc *runner.RunContext) error {
 	slog.Info("handling destroy", "subject", rc.SubjectName(), "state", rc.CurrentState())
 	currentState := rc.CurrentState()
 	actions := rc.StatusActions()
@@ -17,7 +18,7 @@ func handleDestroy(rc *runner.RunContext) error {
 	// Set startTimestamp if not already set and we're in destroy-pending.
 	if (destroy == nil || destroy["startTimestamp"] == nil) && currentState == "destroy-pending" {
 		ts := types.NowUTC()
-		if err := rc.SubjectUpdate(types.SubjectPatch{
+		if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 			Patch: types.PatchBody{
 				Status: map[string]interface{}{
 					"actions": map[string]interface{}{
@@ -42,18 +43,18 @@ func handleDestroy(rc *runner.RunContext) error {
 		}
 		if errorStates[currentState] || rc.DeployerDisabled("destroy") {
 			slog.Info("handleDestroy: destroy catch-all triggered", "subject", rc.SubjectName(), "state", currentState)
-			return handleDestroyCatchAll(rc)
+			return handleDestroyCatchAll(ctx, rc)
 		}
 	}
 
 	// Run destroy if not yet in "destroying" state.
 	if currentState != "destroying" && !rc.DeployerDisabled("destroy") {
-		return runDestroy(rc)
+		return runDestroy(ctx, rc)
 	}
 
 	// Check deployer job if already destroying.
 	if currentState == "destroying" && !rc.DeployerDisabled("destroy") {
-		return checkDeployerJob(rc, "destroy")
+		return checkDeployerJob(ctx, rc, "destroy")
 	}
 
 	return nil
@@ -61,8 +62,8 @@ func handleDestroy(rc *runner.RunContext) error {
 
 // handleDestroyCatchAll performs sandbox cleanup and subject deletion for the
 // destroy catch-all path (error states or deployer disabled).
-func handleDestroyCatchAll(rc *runner.RunContext) error {
-	if err := sandboxCleanup(rc); err != nil {
+func handleDestroyCatchAll(ctx context.Context, rc *runner.RunContext) error {
+	if err := sandboxCleanup(ctx, rc); err != nil {
 		slog.Error("handleDestroyCatchAll: sandbox cleanup error", "subject", rc.SubjectName(), "error", err)
 	}
 	rc.DeleteSubject(true)
@@ -71,11 +72,11 @@ func handleDestroyCatchAll(rc *runner.RunContext) error {
 }
 
 // runDestroy initiates the destroy workflow.
-func runDestroy(rc *runner.RunContext) error {
+func runDestroy(ctx context.Context, rc *runner.RunContext) error {
 	// Sandbox API integration: get placement for destroy vars.
 	var dynamicJobVars map[string]interface{}
 	if rc.SandboxAPIInUse() {
-		result, err := sandboxGet(rc, "destroy")
+		result, err := sandboxGet(ctx, rc, "destroy")
 		if err != nil {
 			slog.Error("runDestroy: sandbox get error", "subject", rc.SubjectName(), "error", err)
 		} else if result != nil {
@@ -87,10 +88,10 @@ func runDestroy(rc *runner.RunContext) error {
 	}
 
 	// Cancel running provision Tower job if exists.
-	cancelTowerJob(rc, "provision")
+	cancelTowerJob(ctx, rc, "provision")
 
 	// Launch Tower job for destroy.
-	if err := launchTowerJob(rc, "destroy", "destroying", nil, dynamicJobVars); err != nil {
+	if err := launchTowerJob(ctx, rc, "destroy", "destroying", nil, dynamicJobVars); err != nil {
 		slog.Error("runDestroy: tower launch failed", "subject", rc.SubjectName(), "error", err)
 		return err
 	}
@@ -100,18 +101,18 @@ func runDestroy(rc *runner.RunContext) error {
 }
 
 // handleDestroyComplete finalizes a successful destroy.
-func handleDestroyComplete(rc *runner.RunContext) error {
+func handleDestroyComplete(ctx context.Context, rc *runner.RunContext) error {
 	slog.Info("destroy complete", "subject", rc.SubjectName())
 	// Sandbox API cleanup: release placement.
 	if rc.SandboxAPIInUse() {
-		if err := sandboxCleanup(rc); err != nil {
+		if err := sandboxCleanup(ctx, rc); err != nil {
 			slog.Error("handleDestroyComplete: sandbox cleanup error", "subject", rc.SubjectName(), "error", err)
 		}
 	}
 
 	ts := types.NowUTC()
 
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{

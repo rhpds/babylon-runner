@@ -21,7 +21,9 @@ import (
 )
 
 // HandlerFunc is the signature for all run handlers.
-type HandlerFunc func(rc *RunContext) error
+// Context is passed as a parameter instead of being stored in RunContext
+// (SonarQube godre:S8242).
+type HandlerFunc func(ctx context.Context, rc *RunContext) error
 
 // Runner implements the main polling loop that fetches runs from the
 // Anarchy API, dispatches them to handlers, and posts results.
@@ -122,7 +124,6 @@ func (r *Runner) pollOnce(ctx context.Context) error {
 	defer metrics.ActiveRun.Set(0)
 
 	rc := &RunContext{
-		Ctx:                  ctx,
 		Payload:              *payload,
 		AnarchyClient:        r.anarchy,
 		Clientset:            r.clientset,
@@ -165,7 +166,7 @@ func (r *Runner) pollOnce(ctx context.Context) error {
 			}
 		}()
 
-		if err := Dispatch(rc, r.handlers); err != nil {
+		if err := Dispatch(ctx, rc, r.handlers); err != nil {
 			slog.Error("handler failed", "run", rc.RunName(), "subject", subject, "error", err)
 			rc.Result.Status = "failed"
 			rc.Result.StatusMessage = err.Error()
@@ -289,7 +290,7 @@ func (r *Runner) postResult(ctx context.Context, runName string, result types.Ru
 }
 
 // Dispatch routes a run to the appropriate handler based on handler type and name.
-func Dispatch(rc *RunContext, handlers map[string]HandlerFunc) error {
+func Dispatch(ctx context.Context, rc *RunContext, handlers map[string]HandlerFunc) error {
 	var key string
 	switch rc.Payload.Handler.Type {
 	case "subjectEvent":
@@ -306,5 +307,5 @@ func Dispatch(rc *RunContext, handlers map[string]HandlerFunc) error {
 	if !ok {
 		return fmt.Errorf("no handler registered for %s", key)
 	}
-	return handler(rc)
+	return handler(ctx, rc)
 }

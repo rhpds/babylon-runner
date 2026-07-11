@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -9,7 +10,7 @@ import (
 )
 
 // checkDeployerJob polls Tower job status and routes to completion/error handlers.
-func checkDeployerJob(rc *runner.RunContext, action string) error {
+func checkDeployerJob(ctx context.Context, rc *runner.RunContext, action string) error {
 	// Get tower job info from status.towerJobs.{action}
 	towerJobs := rc.StatusTowerJobs()
 	actionJob := types.GetNestedMap(towerJobs, action)
@@ -45,7 +46,7 @@ func checkDeployerJob(rc *runner.RunContext, action string) error {
 	}
 
 	// Get OAuth token (cached by pool).
-	token, err := tc.GetToken(rc.Ctx)
+	token, err := tc.GetToken(ctx)
 	if err != nil {
 		slog.Error("checkDeployerJob: failed to get oauth token", "action", action, "subject", rc.SubjectName(), "error", err)
 		rc.ContinueAction("5m")
@@ -53,7 +54,7 @@ func checkDeployerJob(rc *runner.RunContext, action string) error {
 	}
 
 	// Get job status
-	jobStatus, err := tc.GetJobStatus(rc.Ctx, token, deployerJob)
+	jobStatus, err := tc.GetJobStatus(ctx, token, deployerJob)
 	if err != nil {
 		slog.Error("checkDeployerJob: failed to get job status", "action", action, "job", deployerJob, "subject", rc.SubjectName(), "error", err)
 		rc.ContinueAction("5m")
@@ -71,9 +72,9 @@ func checkDeployerJob(rc *runner.RunContext, action string) error {
 	// Route based on status
 	switch status {
 	case "canceled", "error", "failed":
-		return handleDeployerJobFailure(rc, action, status)
+		return handleDeployerJobFailure(ctx, rc, action, status)
 	case "successful":
-		return handleDeployerJobSuccess(rc, action, jobStatus)
+		return handleDeployerJobSuccess(ctx, rc, action, jobStatus)
 	default:
 		// Job still running (pending, waiting, running)
 		slog.Info("checkDeployerJob: job still running", "job", deployerJob, "status", status, "action", action, "subject", rc.SubjectName())
@@ -129,27 +130,27 @@ func continueWithTowerPoll(rc *runner.RunContext) {
 }
 
 // handleDeployerJobFailure routes to action-specific failure handlers.
-func handleDeployerJobFailure(rc *runner.RunContext, action, status string) error {
+func handleDeployerJobFailure(ctx context.Context, rc *runner.RunContext, action, status string) error {
 	switch action {
 	case "provision":
 		switch status {
 		case "canceled":
-			return handleProvisionCanceled(rc)
+			return handleProvisionCanceled(ctx, rc)
 		case "failed":
-			return handleProvisionFailed(rc)
+			return handleProvisionFailed(ctx, rc)
 		default:
-			return handleProvisionError(rc)
+			return handleProvisionError(ctx, rc)
 		}
 	case "destroy":
-		return handleDestroyFailure(rc, status)
+		return handleDestroyFailure(ctx, rc, status)
 	case "start":
-		return handleStartFailure(rc, status)
+		return handleStartFailure(ctx, rc, status)
 	case "stop":
-		return handleStopFailure(rc, status)
+		return handleStopFailure(ctx, rc, status)
 	case "status":
-		return handleStatusFailure(rc, status)
+		return handleStatusFailure(ctx, rc, status)
 	case "update":
-		return handleUpdateFailure(rc, status)
+		return handleUpdateFailure(ctx, rc, status)
 	default:
 		slog.Warn("handleDeployerJobFailure: unknown action", "action", action, "subject", rc.SubjectName())
 		rc.FinishAction(status)
@@ -158,22 +159,22 @@ func handleDeployerJobFailure(rc *runner.RunContext, action, status string) erro
 }
 
 // handleDeployerJobSuccess routes to action-specific completion handlers.
-func handleDeployerJobSuccess(rc *runner.RunContext, action string, jobStatus map[string]interface{}) error {
+func handleDeployerJobSuccess(ctx context.Context, rc *runner.RunContext, action string, jobStatus map[string]interface{}) error {
 	switch action {
 	case "provision":
 		data, messageBody, messages := extractProvisionData(jobStatus)
-		return handleProvisionComplete(rc, data, messageBody, messages)
+		return handleProvisionComplete(ctx, rc, data, messageBody, messages)
 	case "destroy":
-		return handleDestroyComplete(rc)
+		return handleDestroyComplete(ctx, rc)
 	case "start":
-		return handleStartComplete(rc)
+		return handleStartComplete(ctx, rc)
 	case "stop":
-		return handleStopComplete(rc)
+		return handleStopComplete(ctx, rc)
 	case "status":
 		data, _, messages := extractProvisionData(jobStatus)
-		return handleStatusComplete(rc, data, messages)
+		return handleStatusComplete(ctx, rc, data, messages)
 	case "update":
-		return handleUpdateComplete(rc)
+		return handleUpdateComplete(ctx, rc)
 	default:
 		slog.Warn("handleDeployerJobSuccess: unknown action", "action", action, "subject", rc.SubjectName())
 		rc.FinishAction("successful")
@@ -185,7 +186,7 @@ func handleDeployerJobSuccess(rc *runner.RunContext, action string, jobStatus ma
 // Always retries -- catch_all in handleDestroy handles final cleanup.
 // Canceled uses fixed 1m retry; error/failed use dynamic backoff
 // and set healthy=false (consistent with start/stop/update handlers).
-func handleDestroyFailure(rc *runner.RunContext, status string) error {
+func handleDestroyFailure(ctx context.Context, rc *runner.RunContext, status string) error {
 	ts := types.NowUTC()
 	state := fmt.Sprintf("destroy-%s", status)
 
@@ -196,7 +197,7 @@ func handleDestroyFailure(rc *runner.RunContext, status string) error {
 		specVars["healthy"] = false
 	}
 
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{"state": state},
@@ -235,7 +236,7 @@ func handleDestroyFailure(rc *runner.RunContext, status string) error {
 
 // handleStartFailure handles start job error/failure.
 // Retries if desired_state is "started", schedules stop if "stopped".
-func handleStartFailure(rc *runner.RunContext, status string) error {
+func handleStartFailure(ctx context.Context, rc *runner.RunContext, status string) error {
 	ts := types.NowUTC()
 	state := fmt.Sprintf("start-%s", status)
 
@@ -253,7 +254,7 @@ func handleStartFailure(rc *runner.RunContext, status string) error {
 		specVars["job_vars"] = jv
 	}
 
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{"state": state},
@@ -292,7 +293,7 @@ func handleStartFailure(rc *runner.RunContext, status string) error {
 		return nil
 	}
 	if desiredState == "stopped" && !rc.IsBeingDeleted() {
-		return rc.ScheduleAction(types.ScheduleActionRequest{
+		return rc.ScheduleAction(ctx, types.ScheduleActionRequest{
 			Action: "stop",
 			Cancel: []string{"start", "stop"},
 		})
@@ -323,11 +324,11 @@ func buildStopFailureVars(rc *runner.RunContext, status, state string) map[strin
 // handleStopFailure handles stop job error/failure.
 // Calls sandbox stop first, then retries if desired_state is "stopped",
 // schedules start if "started".
-func handleStopFailure(rc *runner.RunContext, status string) error {
+func handleStopFailure(ctx context.Context, rc *runner.RunContext, status string) error {
 	// Call sandbox API stop to save costs even if deployer failed.
 	if rc.SandboxAPIInUse() {
 		if sandboxActionEnabled(rc, "stop") {
-			if err := sandboxStop(rc); err != nil {
+			if err := sandboxStop(ctx, rc); err != nil {
 				slog.Error("handleStopFailure: sandbox stop error", "subject", rc.SubjectName(), "error", err)
 			}
 		}
@@ -337,7 +338,7 @@ func handleStopFailure(rc *runner.RunContext, status string) error {
 	state := fmt.Sprintf("stop-%s", status)
 	specVars := buildStopFailureVars(rc, status, state)
 
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{"state": state},
@@ -376,7 +377,7 @@ func handleStopFailure(rc *runner.RunContext, status string) error {
 		return nil
 	}
 	if desiredState == "started" && !rc.IsBeingDeleted() {
-		return rc.ScheduleAction(types.ScheduleActionRequest{
+		return rc.ScheduleAction(ctx, types.ScheduleActionRequest{
 			Action: "start",
 			Cancel: []string{"start", "stop"},
 		})
@@ -388,10 +389,10 @@ func handleStopFailure(rc *runner.RunContext, status string) error {
 // handleStatusFailure handles status check error/failure/canceled.
 // Sets check_status_state (not current_state), finishes immediately.
 // Note: canceled finishes as "failed" (matching Ansible behavior).
-func handleStatusFailure(rc *runner.RunContext, status string) error {
+func handleStatusFailure(ctx context.Context, rc *runner.RunContext, status string) error {
 	ts := types.NowUTC()
 
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Spec: &types.PatchSpec{
 				Vars: map[string]interface{}{
@@ -429,11 +430,11 @@ func handleStatusFailure(rc *runner.RunContext, status string) error {
 
 // handleUpdateFailure handles update job error/failure.
 // Always retries unless the subject is being deleted.
-func handleUpdateFailure(rc *runner.RunContext, status string) error {
+func handleUpdateFailure(ctx context.Context, rc *runner.RunContext, status string) error {
 	ts := types.NowUTC()
 	state := fmt.Sprintf("update-%s", status)
 
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{"state": state},
@@ -481,7 +482,7 @@ func handleUpdateFailure(rc *runner.RunContext, status string) error {
 
 // handleStatusComplete finalizes a successful status check.
 // statusData and statusMessages come from Tower job artifacts.
-func handleStatusComplete(rc *runner.RunContext, statusData, statusMessages interface{}) error {
+func handleStatusComplete(ctx context.Context, rc *runner.RunContext, statusData, statusMessages interface{}) error {
 	ts := types.NowUTC()
 
 	vars := map[string]interface{}{
@@ -494,7 +495,7 @@ func handleStatusComplete(rc *runner.RunContext, statusData, statusMessages inte
 		vars["status_messages"] = statusMessages
 	}
 
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Spec: &types.PatchSpec{
 				Vars: vars,
@@ -524,10 +525,10 @@ func handleStatusComplete(rc *runner.RunContext, statusData, statusMessages inte
 }
 
 // handleUpdateComplete finalizes a successful update.
-func handleUpdateComplete(rc *runner.RunContext) error {
+func handleUpdateComplete(ctx context.Context, rc *runner.RunContext) error {
 	ts := types.NowUTC()
 
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{

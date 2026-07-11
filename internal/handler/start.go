@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/rhpds/babylon-runner/internal/runner"
@@ -8,14 +9,14 @@ import (
 )
 
 // handleStart routes a start action based on the current state.
-func handleStart(rc *runner.RunContext) error {
+func handleStart(ctx context.Context, rc *runner.RunContext) error {
 	slog.Info("handling start", "subject", rc.SubjectName(), "state", rc.CurrentState())
 
 	if rc.CurrentState() != "starting" {
-		return runStart(rc)
+		return runStart(ctx, rc)
 	}
 	if !rc.DeployerDisabled("start") {
-		return checkDeployerJob(rc, "start")
+		return checkDeployerJob(ctx, rc, "start")
 	}
 	return nil
 }
@@ -23,9 +24,9 @@ func handleStart(rc *runner.RunContext) error {
 // completeStartNoDeployer marks a start action as complete when the deployer is
 // disabled. It sets the subject state to "started" and records the completion
 // timestamp.
-func completeStartNoDeployer(rc *runner.RunContext) error {
+func completeStartNoDeployer(ctx context.Context, rc *runner.RunContext) error {
 	ts := types.NowUTC()
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{
@@ -54,10 +55,10 @@ func completeStartNoDeployer(rc *runner.RunContext) error {
 }
 
 // runStart initiates the start workflow.
-func runStart(rc *runner.RunContext) error {
+func runStart(ctx context.Context, rc *runner.RunContext) error {
 	// Set startTimestamp.
 	ts := types.NowUTC()
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Status: map[string]interface{}{
 				"actions": map[string]interface{}{
@@ -74,7 +75,7 @@ func runStart(rc *runner.RunContext) error {
 
 	// Sandbox API start if enabled.
 	if rc.SandboxAPIInUse() && sandboxActionEnabled(rc, "start") {
-		if err := sandboxStart(rc); err != nil {
+		if err := sandboxStart(ctx, rc); err != nil {
 			slog.Error("runStart: sandbox start error", "subject", rc.SubjectName(), "error", err)
 			if rc.DeployerDisabled("start") {
 				rc.FinishAction("error")
@@ -83,7 +84,7 @@ func runStart(rc *runner.RunContext) error {
 		}
 		// If deployer disabled for start: mark started immediately.
 		if rc.DeployerDisabled("start") {
-			return completeStartNoDeployer(rc)
+			return completeStartNoDeployer(ctx, rc)
 		}
 	}
 
@@ -91,14 +92,14 @@ func runStart(rc *runner.RunContext) error {
 	if !rc.DeployerDisabled("start") {
 		var dynamicJobVars map[string]interface{}
 		if rc.SandboxAPIInUse() {
-			result, err := sandboxGet(rc, "start")
+			result, err := sandboxGet(ctx, rc, "start")
 			if err != nil {
 				slog.Error("runStart: sandbox get error", "subject", rc.SubjectName(), "error", err)
 			} else if result != nil {
 				dynamicJobVars = result.DynamicVars
 			}
 		}
-		if err := launchTowerJob(rc, "start", "starting", nil, dynamicJobVars); err != nil {
+		if err := launchTowerJob(ctx, rc, "start", "starting", nil, dynamicJobVars); err != nil {
 			slog.Error("runStart: tower launch failed", "subject", rc.SubjectName(), "error", err)
 			return err
 		}
@@ -110,11 +111,11 @@ func runStart(rc *runner.RunContext) error {
 }
 
 // handleStartComplete finalizes a successful start.
-func handleStartComplete(rc *runner.RunContext) error {
+func handleStartComplete(ctx context.Context, rc *runner.RunContext) error {
 	slog.Info("start complete", "subject", rc.SubjectName())
 	ts := types.NowUTC()
 
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{

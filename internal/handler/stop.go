@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/rhpds/babylon-runner/internal/runner"
@@ -8,23 +9,23 @@ import (
 )
 
 // handleStop routes a stop action based on the current state.
-func handleStop(rc *runner.RunContext) error {
+func handleStop(ctx context.Context, rc *runner.RunContext) error {
 	slog.Info("handling stop", "subject", rc.SubjectName(), "state", rc.CurrentState())
 
 	if rc.CurrentState() != "stopping" {
-		return runStop(rc)
+		return runStop(ctx, rc)
 	}
 	if !rc.DeployerDisabled("stop") {
-		return checkDeployerJob(rc, "stop")
+		return checkDeployerJob(ctx, rc, "stop")
 	}
 	return nil
 }
 
 // runStop initiates the stop workflow.
-func runStop(rc *runner.RunContext) error {
+func runStop(ctx context.Context, rc *runner.RunContext) error {
 	// Set startTimestamp.
 	ts := types.NowUTC()
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Status: map[string]interface{}{
 				"actions": map[string]interface{}{
@@ -43,14 +44,14 @@ func runStop(rc *runner.RunContext) error {
 	if !rc.DeployerDisabled("stop") {
 		var dynamicJobVars map[string]interface{}
 		if rc.SandboxAPIInUse() {
-			result, err := sandboxGet(rc, "stop")
+			result, err := sandboxGet(ctx, rc, "stop")
 			if err != nil {
 				slog.Error("runStop: sandbox get error", "subject", rc.SubjectName(), "error", err)
 			} else if result != nil {
 				dynamicJobVars = result.DynamicVars
 			}
 		}
-		if err := launchTowerJob(rc, "stop", "stopping", nil, dynamicJobVars); err != nil {
+		if err := launchTowerJob(ctx, rc, "stop", "stopping", nil, dynamicJobVars); err != nil {
 			slog.Error("runStop: tower launch failed", "subject", rc.SubjectName(), "error", err)
 			return err
 		}
@@ -60,7 +61,7 @@ func runStop(rc *runner.RunContext) error {
 
 	// Deployer disabled and sandbox API in use: perform sandbox API stop.
 	if rc.SandboxAPIInUse() && sandboxActionEnabled(rc, "stop") {
-		return completeStopNoDeployer(rc)
+		return completeStopNoDeployer(ctx, rc)
 	}
 
 	return nil
@@ -69,14 +70,14 @@ func runStop(rc *runner.RunContext) error {
 // completeStopNoDeployer handles the stop completion path when the deployer is
 // disabled and sandbox API is in use. It performs the sandbox stop and updates
 // the subject state to "stopped".
-func completeStopNoDeployer(rc *runner.RunContext) error {
-	if err := sandboxStop(rc); err != nil {
+func completeStopNoDeployer(ctx context.Context, rc *runner.RunContext) error {
+	if err := sandboxStop(ctx, rc); err != nil {
 		slog.Error("completeStopNoDeployer: sandbox stop error", "subject", rc.SubjectName(), "error", err)
 		rc.FinishAction("error")
 		return nil
 	}
 	ts := types.NowUTC()
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{
@@ -105,12 +106,12 @@ func completeStopNoDeployer(rc *runner.RunContext) error {
 }
 
 // handleStopComplete finalizes a successful stop.
-func handleStopComplete(rc *runner.RunContext) error {
+func handleStopComplete(ctx context.Context, rc *runner.RunContext) error {
 	slog.Info("stop complete", "subject", rc.SubjectName())
 	ts := types.NowUTC()
 
 	// Update tower jobs status.
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Status: map[string]interface{}{
 				"actions": map[string]interface{}{
@@ -133,13 +134,13 @@ func handleStopComplete(rc *runner.RunContext) error {
 
 	// Sandbox API stop if enabled.
 	if rc.SandboxAPIInUse() && sandboxActionEnabled(rc, "stop") {
-		if err := sandboxStop(rc); err != nil {
+		if err := sandboxStop(ctx, rc); err != nil {
 			slog.Error("handleStopComplete: sandbox stop error", "subject", rc.SubjectName(), "error", err)
 		}
 	}
 
 	// Update state to stopped.
-	if err := rc.SubjectUpdate(types.SubjectPatch{
+	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
 				Labels: map[string]string{

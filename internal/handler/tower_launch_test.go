@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -303,7 +304,7 @@ func TestGetTowerClientForAction(t *testing.T) {
 			rc := newTestRunContext(t, server)
 			tt.setup(rc)
 
-			client, hostname, err := getTowerClientForAction(rc)
+			client, hostname, err := getTowerClientForAction(context.Background(), rc)
 
 			if tt.wantErr {
 				if err == nil {
@@ -858,7 +859,7 @@ func TestCancelTowerJob(t *testing.T) {
 			rc := newTestRunContext(t, anarchyServer)
 			tt.setup(rc, towerServer)
 
-			cancelTowerJob(rc, tt.action)
+			cancelTowerJob(context.Background(), rc, tt.action)
 
 			if tt.wantCanceled && cancelCount != 1 {
 				t.Errorf("cancelTowerJob() canceled %d jobs, want 1", cancelCount)
@@ -903,7 +904,7 @@ func TestCancelTowerJobFailure(t *testing.T) {
 	}
 
 	// Should not panic or return error.
-	cancelTowerJob(rc, "provision")
+	cancelTowerJob(context.Background(), rc, "provision")
 }
 
 // --- TestCancelAllIncompleteTowerJobs ---
@@ -1015,7 +1016,7 @@ func TestCancelAllIncompleteTowerJobs(t *testing.T) {
 			rc := newTestRunContext(t, anarchyServer)
 			tt.setup(rc, towerServer)
 
-			cancelAllIncompleteTowerJobs(rc)
+			cancelAllIncompleteTowerJobs(context.Background(), rc)
 
 			if cancelCount != tt.wantCount {
 				t.Errorf("cancelAllIncompleteTowerJobs() canceled %d jobs, want %d", cancelCount, tt.wantCount)

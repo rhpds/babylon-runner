@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -16,7 +17,7 @@ func TestHandleDestroyFailureError(t *testing.T) {
 	rc := newTestRunContext(t, server)
 	rc.Payload.Action = &types.Action{Spec: types.ActionSpec{Action: "destroy"}}
 
-	if err := handleDestroyFailure(rc, "error"); err != nil {
+	if err := handleDestroyFailure(context.Background(), rc, "error"); err != nil {
 		t.Fatalf("handleDestroyFailure returned error: %v", err)
 	}
 
@@ -60,7 +61,7 @@ func TestHandleDestroyFailureCanceled(t *testing.T) {
 	rc := newTestRunContext(t, server)
 	rc.Payload.Action = &types.Action{Spec: types.ActionSpec{Action: "destroy"}}
 
-	if err := handleDestroyFailure(rc, "canceled"); err != nil {
+	if err := handleDestroyFailure(context.Background(), rc, "canceled"); err != nil {
 		t.Fatalf("handleDestroyFailure returned error: %v", err)
 	}
 
@@ -97,7 +98,7 @@ func TestHandleStatusComplete(t *testing.T) {
 	defer server.Close()
 	rc := newTestRunContext(t, server)
 
-	if err := handleStatusComplete(rc, nil, nil); err != nil {
+	if err := handleStatusComplete(context.Background(), rc, nil, nil); err != nil {
 		t.Fatalf("handleStatusComplete returned error: %v", err)
 	}
 
@@ -152,7 +153,7 @@ func TestHandleUpdateComplete(t *testing.T) {
 	defer server.Close()
 	rc := newTestRunContext(t, server)
 
-	if err := handleUpdateComplete(rc); err != nil {
+	if err := handleUpdateComplete(context.Background(), rc); err != nil {
 		t.Fatalf("handleUpdateComplete returned error: %v", err)
 	}
 
@@ -205,7 +206,7 @@ func TestHandleStartFailureWithError(t *testing.T) {
 	rc := newTestRunContext(t, server)
 	// desired_state not set -> finishes immediately.
 
-	if err := handleStartFailure(rc, "error"); err != nil {
+	if err := handleStartFailure(context.Background(), rc, "error"); err != nil {
 		t.Fatalf("handleStartFailure returned error: %v", err)
 	}
 
@@ -278,7 +279,7 @@ func TestHandleStopFailureWithFailed(t *testing.T) {
 	rc := newTestRunContext(t, server)
 	// desired_state not set -> finishes immediately.
 
-	if err := handleStopFailure(rc, "failed"); err != nil {
+	if err := handleStopFailure(context.Background(), rc, "failed"); err != nil {
 		t.Fatalf("handleStopFailure returned error: %v", err)
 	}
 
@@ -352,7 +353,7 @@ func TestHandleProvisionError(t *testing.T) {
 	defer server.Close()
 	rc := newTestRunContext(t, server)
 
-	if err := handleProvisionError(rc); err != nil {
+	if err := handleProvisionError(context.Background(), rc); err != nil {
 		t.Fatalf("handleProvisionError returned error: %v", err)
 	}
 
@@ -418,7 +419,7 @@ func TestHandleProvisionFailed(t *testing.T) {
 	defer server.Close()
 	rc := newTestRunContext(t, server)
 
-	if err := handleProvisionFailed(rc); err != nil {
+	if err := handleProvisionFailed(context.Background(), rc); err != nil {
 		t.Fatalf("handleProvisionFailed returned error: %v", err)
 	}
 
@@ -497,7 +498,7 @@ func TestHandleProvisionFailedPreservesExistingJobVars(t *testing.T) {
 		"region":         "us-east-1",
 	}
 
-	if err := handleProvisionFailed(rc); err != nil {
+	if err := handleProvisionFailed(context.Background(), rc); err != nil {
 		t.Fatalf("handleProvisionFailed returned error: %v", err)
 	}
 
@@ -538,7 +539,7 @@ func TestHandleProvisionComplete(t *testing.T) {
 	messageBody := "Provision successful"
 	messages := []string{"msg1", "msg2"}
 
-	if err := handleProvisionComplete(rc, provisionData, messageBody, messages); err != nil {
+	if err := handleProvisionComplete(context.Background(), rc, provisionData, messageBody, messages); err != nil {
 		t.Fatalf("handleProvisionComplete returned error: %v", err)
 	}
 
@@ -631,7 +632,7 @@ func TestHandleProvisionCompleteWithNilData(t *testing.T) {
 	rc := newTestRunContext(t, server)
 
 	// Call with all nil data.
-	if err := handleProvisionComplete(rc, nil, nil, nil); err != nil {
+	if err := handleProvisionComplete(context.Background(), rc, nil, nil, nil); err != nil {
 		t.Fatalf("handleProvisionComplete returned error: %v", err)
 	}
 
@@ -803,7 +804,7 @@ func TestHandleProvisionCanceled(t *testing.T) {
 	defer server.Close()
 	rc := newTestRunContext(t, server)
 
-	if err := handleProvisionCanceled(rc); err != nil {
+	if err := handleProvisionCanceled(context.Background(), rc); err != nil {
 		t.Fatalf("handleProvisionCanceled returned error: %v", err)
 	}
 
@@ -877,7 +878,7 @@ func TestHandleStartFailureRetryWhenDesiredStarted(t *testing.T) {
 	// desired_state = started -> should retry with backoff.
 	rc.Payload.Subject.Spec.Vars.DesiredState = "started"
 
-	if err := handleStartFailure(rc, "error"); err != nil {
+	if err := handleStartFailure(context.Background(), rc, "error"); err != nil {
 		t.Fatalf("handleStartFailure returned error: %v", err)
 	}
 
@@ -916,7 +917,7 @@ func TestHandleStartFailureCanceledRetry(t *testing.T) {
 	// desired_state = started, canceled -> fixed 1m retry.
 	rc.Payload.Subject.Spec.Vars.DesiredState = "started"
 
-	if err := handleStartFailure(rc, "canceled"); err != nil {
+	if err := handleStartFailure(context.Background(), rc, "canceled"); err != nil {
 		t.Fatalf("handleStartFailure returned error: %v", err)
 	}
 
@@ -953,7 +954,7 @@ func TestHandleStartFailureRedirectToStop(t *testing.T) {
 	// desired_state = stopped -> should schedule stop instead of retrying.
 	rc.Payload.Subject.Spec.Vars.DesiredState = "stopped"
 
-	if err := handleStartFailure(rc, "failed"); err != nil {
+	if err := handleStartFailure(context.Background(), rc, "failed"); err != nil {
 		t.Fatalf("handleStartFailure returned error: %v", err)
 	}
 
@@ -999,7 +1000,7 @@ func TestHandleStartFailureWhileBeingDeleted(t *testing.T) {
 	ts := "2024-01-01T00:00:00Z"
 	rc.Payload.Subject.Metadata.DeletionTimestamp = &ts
 
-	if err := handleStartFailure(rc, "error"); err != nil {
+	if err := handleStartFailure(context.Background(), rc, "error"); err != nil {
 		t.Fatalf("handleStartFailure returned error: %v", err)
 	}
 
@@ -1022,7 +1023,7 @@ func TestHandleStartFailureForensicsOnFailed(t *testing.T) {
 	rc := newTestRunContext(t, server)
 	rc.Payload.Action = &types.Action{Spec: types.ActionSpec{Action: "start"}}
 
-	if err := handleStartFailure(rc, "failed"); err != nil {
+	if err := handleStartFailure(context.Background(), rc, "failed"); err != nil {
 		t.Fatalf("handleStartFailure returned error: %v", err)
 	}
 
@@ -1055,7 +1056,7 @@ func TestHandleStopFailureRetryWhenDesiredStopped(t *testing.T) {
 	// desired_state = stopped -> should retry with backoff.
 	rc.Payload.Subject.Spec.Vars.DesiredState = "stopped"
 
-	if err := handleStopFailure(rc, "error"); err != nil {
+	if err := handleStopFailure(context.Background(), rc, "error"); err != nil {
 		t.Fatalf("handleStopFailure returned error: %v", err)
 	}
 
@@ -1092,7 +1093,7 @@ func TestHandleStopFailureCanceledRetry(t *testing.T) {
 	// desired_state = stopped, canceled -> fixed 1m retry.
 	rc.Payload.Subject.Spec.Vars.DesiredState = "stopped"
 
-	if err := handleStopFailure(rc, "canceled"); err != nil {
+	if err := handleStopFailure(context.Background(), rc, "canceled"); err != nil {
 		t.Fatalf("handleStopFailure returned error: %v", err)
 	}
 
@@ -1128,7 +1129,7 @@ func TestHandleStopFailureRedirectToStart(t *testing.T) {
 	// desired_state = started -> should schedule start instead.
 	rc.Payload.Subject.Spec.Vars.DesiredState = "started"
 
-	if err := handleStopFailure(rc, "error"); err != nil {
+	if err := handleStopFailure(context.Background(), rc, "error"); err != nil {
 		t.Fatalf("handleStopFailure returned error: %v", err)
 	}
 
@@ -1168,7 +1169,7 @@ func TestHandleStopFailureWhileBeingDeleted(t *testing.T) {
 	ts := "2024-01-01T00:00:00Z"
 	rc.Payload.Subject.Metadata.DeletionTimestamp = &ts
 
-	if err := handleStopFailure(rc, "failed"); err != nil {
+	if err := handleStopFailure(context.Background(), rc, "failed"); err != nil {
 		t.Fatalf("handleStopFailure returned error: %v", err)
 	}
 
@@ -1190,7 +1191,7 @@ func TestHandleStopFailureForensicsOnFailed(t *testing.T) {
 	rc := newTestRunContext(t, server)
 	rc.Payload.Action = &types.Action{Spec: types.ActionSpec{Action: "stop"}}
 
-	if err := handleStopFailure(rc, "failed"); err != nil {
+	if err := handleStopFailure(context.Background(), rc, "failed"); err != nil {
 		t.Fatalf("handleStopFailure returned error: %v", err)
 	}
 
@@ -1218,7 +1219,7 @@ func TestHandleStatusFailureError(t *testing.T) {
 	defer server.Close()
 	rc := newTestRunContext(t, server)
 
-	if err := handleStatusFailure(rc, "error"); err != nil {
+	if err := handleStatusFailure(context.Background(), rc, "error"); err != nil {
 		t.Fatalf("handleStatusFailure returned error: %v", err)
 	}
 
@@ -1266,7 +1267,7 @@ func TestHandleStatusFailureCanceledFinishesAsFailed(t *testing.T) {
 	defer server.Close()
 	rc := newTestRunContext(t, server)
 
-	if err := handleStatusFailure(rc, "canceled"); err != nil {
+	if err := handleStatusFailure(context.Background(), rc, "canceled"); err != nil {
 		t.Fatalf("handleStatusFailure returned error: %v", err)
 	}
 
@@ -1299,7 +1300,7 @@ func TestHandleUpdateFailureRetry(t *testing.T) {
 	rc := newTestRunContext(t, server)
 	rc.Payload.Action = &types.Action{Spec: types.ActionSpec{Action: "update"}}
 
-	if err := handleUpdateFailure(rc, "error"); err != nil {
+	if err := handleUpdateFailure(context.Background(), rc, "error"); err != nil {
 		t.Fatalf("handleUpdateFailure returned error: %v", err)
 	}
 
@@ -1337,7 +1338,7 @@ func TestHandleUpdateFailureCanceled(t *testing.T) {
 	rc := newTestRunContext(t, server)
 	rc.Payload.Action = &types.Action{Spec: types.ActionSpec{Action: "update"}}
 
-	if err := handleUpdateFailure(rc, "canceled"); err != nil {
+	if err := handleUpdateFailure(context.Background(), rc, "canceled"); err != nil {
 		t.Fatalf("handleUpdateFailure returned error: %v", err)
 	}
 
@@ -1365,7 +1366,7 @@ func TestHandleUpdateFailureWhileBeingDeleted(t *testing.T) {
 	ts := "2024-01-01T00:00:00Z"
 	rc.Payload.Subject.Metadata.DeletionTimestamp = &ts
 
-	if err := handleUpdateFailure(rc, "failed"); err != nil {
+	if err := handleUpdateFailure(context.Background(), rc, "failed"); err != nil {
 		t.Fatalf("handleUpdateFailure returned error: %v", err)
 	}
 
@@ -1413,7 +1414,7 @@ func TestHandleStatusCompleteWithData(t *testing.T) {
 	statusData := map[string]interface{}{"cloud_state": "running"}
 	statusMessages := []interface{}{"all good"}
 
-	if err := handleStatusComplete(rc, statusData, statusMessages); err != nil {
+	if err := handleStatusComplete(context.Background(), rc, statusData, statusMessages); err != nil {
 		t.Fatalf("handleStatusComplete returned error: %v", err)
 	}
 

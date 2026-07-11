@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -29,7 +30,7 @@ func TestHandleStatusPending(t *testing.T) {
 	// Set check_status_state to pending.
 	rc.Payload.Subject.Spec.Vars.CheckStatusState = "pending"
 
-	if err := handleStatus(rc); err != nil {
+	if err := handleStatus(context.Background(), rc); err != nil {
 		t.Fatalf("handleStatus returned error: %v", err)
 	}
 
@@ -79,7 +80,7 @@ func TestHandleStatusRunning(t *testing.T) {
 	// Set check_status_state to running.
 	rc.Payload.Subject.Spec.Vars.CheckStatusState = "running"
 
-	if err := handleStatus(rc); err != nil {
+	if err := handleStatus(context.Background(), rc); err != nil {
 		t.Fatalf("handleStatus returned error: %v", err)
 	}
 
@@ -116,7 +117,7 @@ func TestHandleStatus_DeployerDisabled_Pending_FinishesAction(t *testing.T) {
 		},
 	}
 
-	if err := handleStatus(rc); err != nil {
+	if err := handleStatus(context.Background(), rc); err != nil {
 		t.Fatalf("handleStatus returned error: %v", err)
 	}
 
@@ -176,7 +177,7 @@ func TestHandleStatus_DeployerDisabled_Running_FinishesAction(t *testing.T) {
 		},
 	}
 
-	if err := handleStatus(rc); err != nil {
+	if err := handleStatus(context.Background(), rc); err != nil {
 		t.Fatalf("handleStatus returned error: %v", err)
 	}
 
@@ -228,7 +229,7 @@ func TestHandleUpdateNotUpdating(t *testing.T) {
 	// Set current_state to started (not updating).
 	rc.Payload.Subject.Spec.Vars.CurrentState = "started"
 
-	if err := handleUpdate(rc); err != nil {
+	if err := handleUpdate(context.Background(), rc); err != nil {
 		t.Fatalf("handleUpdate returned error: %v", err)
 	}
 
@@ -255,7 +256,7 @@ func TestHandleUpdateUpdating(t *testing.T) {
 	// Set current_state to updating.
 	rc.Payload.Subject.Spec.Vars.CurrentState = "updating"
 
-	if err := handleUpdate(rc); err != nil {
+	if err := handleUpdate(context.Background(), rc); err != nil {
 		t.Fatalf("handleUpdate returned error: %v", err)
 	}
 
