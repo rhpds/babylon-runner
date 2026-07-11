@@ -14,43 +14,40 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
-
-      - name: Get previous tag
-        id: prev_tag
-        run: |
-          PREV_TAG=$(git tag --sort=-version:refname | head -2 | tail -1)
-          echo "PREV_TAG=${PREV_TAG}" >> $GITHUB_OUTPUT
 
       - name: Generate changelog
         id: changelog
         run: |
-          PREV_TAG="${{ steps.prev_tag.outputs.PREV_TAG }}"
           CURRENT_TAG="${GITHUB_REF#refs/tags/}"
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^${CURRENT_TAG}$" | head -1)
           if [ -z "${PREV_TAG}" ]; then
             CHANGELOG=$(git log --oneline)
           else
             CHANGELOG=$(git log --oneline "${PREV_TAG}..${CURRENT_TAG}")
           fi
-          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
-          echo "${CHANGELOG}" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Install Helm
-        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+          {
+            echo "BODY<<EOF"
+            echo "## Changes"
+            echo ""
+            echo "${CHANGELOG}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Package Helm chart
         run: helm package helm/ -d dist/
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
-        with:
-          body: |
-            ## Changes
-            ${{ steps.changelog.outputs.CHANGELOG }}
-          files: |
-            dist/*.tgz
+        env:
+          RELEASE_BODY: ${{ steps.changelog.outputs.BODY }}
+        run: |
+          CURRENT_TAG="${GITHUB_REF#refs/tags/}"
+          gh release create "${CURRENT_TAG}" dist/*.tgz \
+            --title "${CURRENT_TAG}" \
+            --notes "${RELEASE_BODY}"
