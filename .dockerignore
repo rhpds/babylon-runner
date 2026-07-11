@@ -1,0 +1,10 @@
+.git/
+.github/
+helm/
+docs/
+*.md
+dev-run.sh
+bump-version.sh
+.gitlab-ci.yml
+sonar-project.properties
+.claude/

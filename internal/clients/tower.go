@@ -7,7 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand"
+	"crypto/rand"
+	"math/big"
 	"net/http"
 	"net/url"
 	"strings"
@@ -58,7 +59,8 @@ func unvaultRecurse(value interface{}, vaulted map[string]string) interface{} {
 			for {
 				b := make([]byte, 12)
 				for i := range b {
-					b[i] = vaultVarChars[rand.Intn(len(vaultVarChars))]
+					n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(vaultVarChars))))
+					b[i] = vaultVarChars[n.Int64()]
 				}
 				varName = "__vaulted_value_" + string(b)
 				if _, exists := vaulted[varName]; !exists {
@@ -186,7 +188,8 @@ func SelectController(controllers []map[string]interface{}, mode string) map[str
 		}
 		return best
 	default: // "random"
-		return controllers[rand.Intn(len(controllers))]
+		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(controllers))))
+		return controllers[n.Int64()]
 	}
 }
 
