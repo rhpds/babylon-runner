@@ -10,14 +10,16 @@ import (
 	"github.com/rhpds/babylon-runner/internal/types"
 )
 
+const lifecycleEntryPoint = "ansible/lifecycle_entry_point.yml"
+
 // Default deployer entry points from babylon governor defaults/main.yaml.
 var defaultEntryPoints = map[string]string{
 	"provision": "ansible/main.yml",
 	"destroy":   "ansible/destroy.yml",
-	"start":     "ansible/lifecycle_entry_point.yml",
-	"stop":      "ansible/lifecycle_entry_point.yml",
-	"status":    "ansible/lifecycle_entry_point.yml",
-	"update":    "ansible/lifecycle_entry_point.yml",
+	"start":     lifecycleEntryPoint,
+	"stop":      lifecycleEntryPoint,
+	"status":    lifecycleEntryPoint,
+	"update":    lifecycleEntryPoint,
 }
 
 // getDeployerEntryPoint returns the playbook path for the given action.

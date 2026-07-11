@@ -23,6 +23,21 @@ import (
 
 const vaultVarChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
+const (
+	headerContentType = "Content-Type"
+	mimeJSON          = "application/json"
+
+	pathCredentials  = "/api/v2/credentials/"
+	pathJobTemplates = "/api/v2/job_templates/"
+
+	errCreateRequest  = "create request: %w"
+	errPostRequest    = "POST %s: %w"
+	errGetRequest     = "GET %s: %w"
+	errPostStatus     = "POST %s: status %d"
+	errGetStatus      = "GET %s: status %d"
+	errDecodeResponse = "decode response: %w"
+)
+
 // InsertUnvaultString transforms vault-encrypted values in a map into
 // Jinja2 lookup expressions so Tower can decrypt them at runtime.
 // Matches the Python insert_unvault_string filter from babylon_anarchy_governor.
@@ -209,24 +224,24 @@ func (tc *TowerClient) CreateOAuthToken(ctx context.Context) (token string, toke
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
-		return "", 0, fmt.Errorf("create request: %w", err)
+		return "", 0, fmt.Errorf(errCreateRequest, err)
 	}
 	req.SetBasicAuth(tc.username, tc.password)
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(headerContentType, mimeJSON)
 
 	resp, err := tc.client.Do(req)
 	if err != nil {
-		return "", 0, fmt.Errorf("POST %s: %w", url, err)
+		return "", 0, fmt.Errorf(errPostRequest, url, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", 0, fmt.Errorf("POST %s: status %d", url, resp.StatusCode)
+		return "", 0, fmt.Errorf(errPostStatus, url, resp.StatusCode)
 	}
 
 	var result map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", 0, fmt.Errorf("decode response: %w", err)
+		return "", 0, fmt.Errorf(errDecodeResponse, err)
 	}
 
 	tok, ok := result["token"].(string)
@@ -247,7 +262,7 @@ func (tc *TowerClient) DeleteOAuthToken(ctx context.Context, tokenID int) error 
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return fmt.Errorf(errCreateRequest, err)
 	}
 	req.SetBasicAuth(tc.username, tc.password)
 
@@ -269,18 +284,18 @@ func (tc *TowerClient) GetJobStatus(ctx context.Context, oauthToken string, jobI
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf(errCreateRequest, err)
 	}
-	req.Header.Set("Authorization", "Bearer "+oauthToken)
+	req.Header.Set("Authorization", httputil.BearerPrefix+oauthToken)
 
 	resp, err := tc.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", url, err)
+		return nil, fmt.Errorf(errGetRequest, url, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
+		return nil, fmt.Errorf(errGetStatus, url, resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -290,7 +305,7 @@ func (tc *TowerClient) GetJobStatus(ctx context.Context, oauthToken string, jobI
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+		return nil, fmt.Errorf(errDecodeResponse, err)
 	}
 	return result, nil
 }
@@ -301,13 +316,13 @@ func (tc *TowerClient) CancelJob(ctx context.Context, oauthToken string, jobID i
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return fmt.Errorf(errCreateRequest, err)
 	}
-	req.Header.Set("Authorization", "Bearer "+oauthToken)
+	req.Header.Set("Authorization", httputil.BearerPrefix+oauthToken)
 
 	resp, err := tc.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("POST %s: %w", url, err)
+		return fmt.Errorf(errPostRequest, url, err)
 	}
 	defer resp.Body.Close()
 
@@ -316,7 +331,7 @@ func (tc *TowerClient) CancelJob(ctx context.Context, oauthToken string, jobID i
 		return nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("POST %s: status %d", url, resp.StatusCode)
+		return fmt.Errorf(errPostStatus, url, resp.StatusCode)
 	}
 	return nil
 }
@@ -329,18 +344,18 @@ func (tc *TowerClient) SearchResource(ctx context.Context, oauthToken, path, nam
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
-		return 0, fmt.Errorf("create request: %w", err)
+		return 0, fmt.Errorf(errCreateRequest, err)
 	}
-	req.Header.Set("Authorization", "Bearer "+oauthToken)
+	req.Header.Set("Authorization", httputil.BearerPrefix+oauthToken)
 
 	resp, err := tc.client.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("GET %s: %w", reqURL, err)
+		return 0, fmt.Errorf(errGetRequest, reqURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, fmt.Errorf("GET %s: status %d", reqURL, resp.StatusCode)
+		return 0, fmt.Errorf(errGetStatus, reqURL, resp.StatusCode)
 	}
 
 	var result struct {
@@ -348,7 +363,7 @@ func (tc *TowerClient) SearchResource(ctx context.Context, oauthToken, path, nam
 		Results []map[string]interface{} `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return 0, fmt.Errorf("decode response: %w", err)
+		return 0, fmt.Errorf(errDecodeResponse, err)
 	}
 
 	if result.Count > 0 && len(result.Results) > 0 {
@@ -371,14 +386,14 @@ func (tc *TowerClient) CreateResource(ctx context.Context, oauthToken, path stri
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
 	if err != nil {
-		return 0, fmt.Errorf("create request: %w", err)
+		return 0, fmt.Errorf(errCreateRequest, err)
 	}
-	req.Header.Set("Authorization", "Bearer "+oauthToken)
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", httputil.BearerPrefix+oauthToken)
+	req.Header.Set(headerContentType, mimeJSON)
 
 	resp, err := tc.client.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("POST %s: %w", reqURL, err)
+		return 0, fmt.Errorf(errPostRequest, reqURL, err)
 	}
 	defer resp.Body.Close()
 
@@ -389,7 +404,7 @@ func (tc *TowerClient) CreateResource(ctx context.Context, oauthToken, path stri
 
 	var result map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return 0, fmt.Errorf("decode response: %w", err)
+		return 0, fmt.Errorf(errDecodeResponse, err)
 	}
 
 	id, ok := result["id"].(float64)
@@ -422,20 +437,20 @@ func (tc *TowerClient) UpdateProject(ctx context.Context, oauthToken string, pro
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, nil)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return fmt.Errorf(errCreateRequest, err)
 	}
-	req.Header.Set("Authorization", "Bearer "+oauthToken)
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", httputil.BearerPrefix+oauthToken)
+	req.Header.Set(headerContentType, mimeJSON)
 
 	resp, err := tc.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("POST %s: %w", reqURL, err)
+		return fmt.Errorf(errPostRequest, reqURL, err)
 	}
 	defer resp.Body.Close()
 
 	// 202 Accepted is the normal response for project update.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("POST %s: status %d", reqURL, resp.StatusCode)
+		return fmt.Errorf(errPostStatus, reqURL, resp.StatusCode)
 	}
 	return nil
 }
@@ -447,18 +462,18 @@ func (tc *TowerClient) listChildIDs(ctx context.Context, oauthToken, parentPath 
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf(errCreateRequest, err)
 	}
-	req.Header.Set("Authorization", "Bearer "+oauthToken)
+	req.Header.Set("Authorization", httputil.BearerPrefix+oauthToken)
 
 	resp, err := tc.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", reqURL, err)
+		return nil, fmt.Errorf(errGetRequest, reqURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("GET %s: status %d", reqURL, resp.StatusCode)
+		return nil, fmt.Errorf(errGetStatus, reqURL, resp.StatusCode)
 	}
 
 	var result struct {
@@ -467,7 +482,7 @@ func (tc *TowerClient) listChildIDs(ctx context.Context, oauthToken, parentPath 
 		} `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+		return nil, fmt.Errorf(errDecodeResponse, err)
 	}
 
 	ids := make([]int, len(result.Results))
@@ -486,14 +501,14 @@ func (tc *TowerClient) postChild(ctx context.Context, oauthToken, reqURL string,
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return fmt.Errorf(errCreateRequest, err)
 	}
-	req.Header.Set("Authorization", "Bearer "+oauthToken)
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", httputil.BearerPrefix+oauthToken)
+	req.Header.Set(headerContentType, mimeJSON)
 
 	resp, err := tc.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("POST %s: %w", reqURL, err)
+		return fmt.Errorf(errPostRequest, reqURL, err)
 	}
 	defer resp.Body.Close()
 
@@ -598,7 +613,7 @@ func (tc *TowerClient) LaunchJob(ctx context.Context, config TowerJobConfig) (in
 		}
 		for vaultID, vaultPassword := range config.VaultCredentials {
 			credName := config.Organization + " " + vaultID
-			credID, err := tc.EnsureResource(ctx, token, "/api/v2/credentials/", map[string]interface{}{
+			credID, err := tc.EnsureResource(ctx, token, pathCredentials, map[string]interface{}{
 				"name":            credName,
 				"credential_type": float64(vaultTypeID),
 				"inputs": map[string]interface{}{
@@ -616,7 +631,7 @@ func (tc *TowerClient) LaunchJob(ctx context.Context, config TowerJobConfig) (in
 
 	// Look up static credentials by name.
 	for _, credName := range config.Credentials {
-		credID, err := tc.SearchResource(ctx, token, "/api/v2/credentials/", credName)
+		credID, err := tc.SearchResource(ctx, token, pathCredentials, credName)
 		if err != nil {
 			return 0, fmt.Errorf("find credential %q: %w", credName, err)
 		}
@@ -656,7 +671,7 @@ func (tc *TowerClient) LaunchJob(ctx context.Context, config TowerJobConfig) (in
 		// the credential name (must be pre-created on Tower).
 		if config.ExecutionEnvironment.Private {
 			registry := strings.SplitN(config.ExecutionEnvironment.Image, "/", 2)[0]
-			regCredID, err := tc.SearchResource(ctx, token, "/api/v2/credentials/", registry)
+			regCredID, err := tc.SearchResource(ctx, token, pathCredentials, registry)
 			if err != nil {
 				slog.Warn("LaunchJob: registry credential lookup failed for private EE", "registry", registry, "error", err)
 			}
@@ -693,18 +708,18 @@ func (tc *TowerClient) LaunchJob(ctx context.Context, config TowerJobConfig) (in
 		templateData["extra_vars"] = string(extraVarsJSON)
 	}
 
-	tmplID, err := tc.EnsureResource(ctx, token, "/api/v2/job_templates/", templateData)
+	tmplID, err := tc.EnsureResource(ctx, token, pathJobTemplates, templateData)
 	if err != nil {
 		// Retry: update project SCM, then retry template creation.
 		_ = tc.UpdateProject(ctx, token, projID)
-		tmplID, err = tc.EnsureResource(ctx, token, "/api/v2/job_templates/", templateData)
+		tmplID, err = tc.EnsureResource(ctx, token, pathJobTemplates, templateData)
 		if err != nil {
 			return 0, fmt.Errorf("ensure job template: %w", err)
 		}
 	}
 
 	// Step 8: Sync credentials with the template (idempotent diff-based).
-	if err := tc.SyncChildren(ctx, token, "/api/v2/job_templates/", tmplID, "credentials", credIDs); err != nil {
+	if err := tc.SyncChildren(ctx, token, pathJobTemplates, tmplID, "credentials", credIDs); err != nil {
 		return 0, fmt.Errorf("sync credentials: %w", err)
 	}
 
@@ -722,7 +737,7 @@ func (tc *TowerClient) LaunchJob(ctx context.Context, config TowerJobConfig) (in
 		}
 		igIDs = append(igIDs, igID)
 	}
-	if err := tc.SyncChildren(ctx, token, "/api/v2/job_templates/", tmplID, "instance_groups", igIDs); err != nil {
+	if err := tc.SyncChildren(ctx, token, pathJobTemplates, tmplID, "instance_groups", igIDs); err != nil {
 		return 0, fmt.Errorf("sync instance groups: %w", err)
 	}
 

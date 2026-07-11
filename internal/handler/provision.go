@@ -8,14 +8,19 @@ import (
 	"github.com/rhpds/babylon-runner/internal/types"
 )
 
+const (
+	stateQueued  = "provision-queued"
+	statePending = "provision-pending"
+)
+
 // handleProvision routes a provision action based on the current state.
 func handleProvision(rc *runner.RunContext) error {
 	slog.Info("handling provision", "subject", rc.SubjectName(), "state", rc.CurrentState())
 
 	switch rc.CurrentState() {
-	case "provision-pending":
+	case statePending:
 		return runProvision(rc)
-	case "provision-queued":
+	case stateQueued:
 		return checkProvisionQueue(rc)
 	case "provisioning":
 		if !rc.DeployerDisabled("provision") {
@@ -67,11 +72,11 @@ func runProvision(rc *runner.RunContext) error {
 			if err := rc.SubjectUpdate(types.SubjectPatch{
 				Patch: types.PatchBody{
 					Metadata: &types.PatchMetadata{
-						Labels: map[string]string{"state": "provision-queued"},
+						Labels: map[string]string{"state": stateQueued},
 					},
 					Spec: &types.PatchSpec{
 						Vars: map[string]interface{}{
-							"current_state": "provision-queued",
+							"current_state": stateQueued,
 						},
 					},
 					Status: map[string]interface{}{
@@ -391,12 +396,12 @@ func checkProvisionQueue(rc *runner.RunContext) error {
 		for k, v := range labels {
 			allLabels[k] = v
 		}
-		allLabels["state"] = "provision-pending"
+		allLabels["state"] = statePending
 		patch.Metadata = &types.PatchMetadata{Labels: allLabels}
 
 		// Merge dynamic vars into job_vars.
 		specVars := map[string]interface{}{
-			"current_state": "provision-pending",
+			"current_state": statePending,
 		}
 		if len(dynamicVars) > 0 {
 			jv := rc.JobVars()

@@ -9,6 +9,8 @@ import (
 	"net/http"
 )
 
+const BearerPrefix = "Bearer "
+
 // DoJSON executes an HTTP request with optional JSON body and response
 // decoding. body can be nil (no request body). result can be nil (response
 // body is discarded). Returns the HTTP status code. Non-2xx status codes
