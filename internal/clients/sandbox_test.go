@@ -11,8 +11,8 @@ import (
 
 func TestSandboxAPILoginViaTokenCache(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("method = %s, want POST", r.Method)
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", r.Method)
 		}
 		if r.URL.Path != "/api/v1/login" {
 			t.Errorf("path = %s, want /api/v1/login", r.URL.Path)
@@ -390,7 +390,7 @@ func TestSandboxAPIClientRetry(t *testing.T) {
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/api/v1/login" && r.Method == "POST":
+		case r.URL.Path == "/api/v1/login" && r.Method == "GET":
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{
 				"access_token": "test-token",

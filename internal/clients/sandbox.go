@@ -95,18 +95,18 @@ func (c *SandboxAPIClient) login(ctx context.Context, loginToken string) (string
 		}
 
 		var result map[string]string
-		status, err := httputil.DoJSON(ctx, c.client, http.MethodPost, loginURL, headers, nil, &result)
+		status, err := httputil.DoJSON(ctx, c.client, http.MethodGet, loginURL, headers, nil, &result)
 		if err != nil {
 			if status >= 200 {
 				// Got a response but decode failed — terminal.
 				return "", 0, fmt.Errorf("decode login response: %w", err)
 			}
 			// Transport error — retryable.
-			lastErr = fmt.Errorf("POST %s: %w", loginURL, err)
+			lastErr = fmt.Errorf("GET %s: %w", loginURL, err)
 			continue
 		}
 		if status != http.StatusOK {
-			lastErr = fmt.Errorf("POST %s: status %d", loginURL, status)
+			lastErr = fmt.Errorf("GET %s: status %d", loginURL, status)
 			continue
 		}
 
