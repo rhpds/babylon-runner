@@ -558,6 +558,22 @@ func extractIBMSandboxVars(res map[string]interface{}, creds bool) map[string]in
 	return toMerge
 }
 
+// extractRosaSandboxVars extracts vars from a RosaSandbox resource.
+// Unlike other kinds, credential fields are top-level (not in a credentials array).
+func extractRosaSandboxVars(res map[string]interface{}, creds bool) map[string]interface{} {
+	toMerge := map[string]interface{}{
+		"rosa_sandbox_name":     getStringDefault(res, "name", "unknown"),
+		"rosa_aws_account_name": getStringDefault(res, "aws_account_name", "unknown"),
+	}
+
+	if creds {
+		toMerge["rosa_sa_client_id"] = getStringDefault(res, "sa_client_id", "unknown")
+		toMerge["rosa_sa_secret"] = getStringDefault(res, "sa_secret", "unknown")
+	}
+
+	return toMerge
+}
+
 // resolveVarName returns the target variable name for a sandbox resource,
 // taken from the "var" annotation. Defaults to "main" if not set.
 func resolveVarName(res map[string]interface{}) string {
@@ -580,6 +596,8 @@ func extractResourceVars(res map[string]interface{}, creds bool) map[string]inte
 		return extractOcpSandboxVars(res, creds)
 	case "IBMResourceGroupSandbox":
 		return extractIBMSandboxVars(res, creds)
+	case "RosaSandbox":
+		return extractRosaSandboxVars(res, creds)
 	default:
 		toMerge := make(map[string]interface{})
 		if creds {

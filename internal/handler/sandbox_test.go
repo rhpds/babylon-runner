@@ -1119,6 +1119,198 @@ func TestExtractSandboxVars(t *testing.T) {
 		}
 	})
 
+	t.Run("RosaSandbox with creds=true", func(t *testing.T) {
+		placement := map[string]interface{}{
+			"resources": []interface{}{
+				map[string]interface{}{
+					"kind":             "RosaSandbox",
+					"name":             "rosa-sandbox-791a8fb2",
+					"aws_account_name": "sandbox3104",
+					"sa_client_id":     "e2068e83-c2c9-4879-9960-3195c4cc453a",
+					"sa_secret":        "foobarRosaSecret",
+				},
+			},
+		}
+
+		vars := extractSandboxVars(placement, true)
+
+		if vars["rosa_sandbox_name"] != "rosa-sandbox-791a8fb2" {
+			t.Errorf("rosa_sandbox_name = %v, want rosa-sandbox-791a8fb2", vars["rosa_sandbox_name"])
+		}
+		if vars["rosa_aws_account_name"] != "sandbox3104" {
+			t.Errorf("rosa_aws_account_name = %v, want sandbox3104", vars["rosa_aws_account_name"])
+		}
+		if vars["rosa_sa_client_id"] != "e2068e83-c2c9-4879-9960-3195c4cc453a" {
+			t.Errorf("rosa_sa_client_id = %v, want e2068e83-c2c9-4879-9960-3195c4cc453a", vars["rosa_sa_client_id"])
+		}
+		if vars["rosa_sa_secret"] != "foobarRosaSecret" {
+			t.Errorf("rosa_sa_secret = %v, want foobarRosaSecret", vars["rosa_sa_secret"])
+		}
+		sandboxes, ok := vars["sandboxes"].([]interface{})
+		if !ok || len(sandboxes) != 1 {
+			t.Errorf("expected sandboxes with 1 element, got %v", vars["sandboxes"])
+		}
+	})
+
+	t.Run("RosaSandbox with creds=false", func(t *testing.T) {
+		placement := map[string]interface{}{
+			"resources": []interface{}{
+				map[string]interface{}{
+					"kind":             "RosaSandbox",
+					"name":             "rosa-sandbox-791a8fb2",
+					"aws_account_name": "sandbox3104",
+					"sa_client_id":     "e2068e83-c2c9-4879-9960-3195c4cc453a",
+					"sa_secret":        "foobarRosaSecret",
+				},
+			},
+		}
+
+		vars := extractSandboxVars(placement, false)
+
+		if vars["rosa_sandbox_name"] != "rosa-sandbox-791a8fb2" {
+			t.Errorf("rosa_sandbox_name = %v, want rosa-sandbox-791a8fb2", vars["rosa_sandbox_name"])
+		}
+		if vars["rosa_aws_account_name"] != "sandbox3104" {
+			t.Errorf("rosa_aws_account_name = %v, want sandbox3104", vars["rosa_aws_account_name"])
+		}
+		if _, ok := vars["rosa_sa_client_id"]; ok {
+			t.Error("rosa_sa_client_id should not be present with creds=false")
+		}
+		if _, ok := vars["rosa_sa_secret"]; ok {
+			t.Error("rosa_sa_secret should not be present with creds=false")
+		}
+		if _, ok := vars["sandboxes"]; ok {
+			t.Error("sandboxes should not be present with creds=false")
+		}
+	})
+
+	t.Run("multi-resource AwsSandbox + RosaSandbox with creds=true", func(t *testing.T) {
+		placement := map[string]interface{}{
+			"resources": []interface{}{
+				map[string]interface{}{
+					"kind":           "AwsSandbox",
+					"name":           "sandbox3104",
+					"account_id":     "202901899156",
+					"zone":           "sandbox3104.opentlc.com",
+					"hosted_zone_id": "Z05256543CVIM6UZOSDUP",
+					"credentials": []interface{}{
+						map[string]interface{}{
+							"kind":                  "aws_iam_key",
+							"name":                  "admin-key",
+							"aws_access_key_id":     "foobarKey",
+							"aws_secret_access_key": "foobarSecret",
+						},
+					},
+				},
+				map[string]interface{}{
+					"kind":             "RosaSandbox",
+					"name":             "rosa-sandbox-791a8fb2",
+					"aws_account_name": "sandbox3104",
+					"sa_client_id":     "e2068e83-c2c9-4879-9960-3195c4cc453a",
+					"sa_secret":        "foobarRosaSecret",
+				},
+			},
+		}
+
+		vars := extractSandboxVars(placement, true)
+
+		// AWS vars
+		if vars["sandbox_name"] != "sandbox3104" {
+			t.Errorf("sandbox_name = %v, want sandbox3104", vars["sandbox_name"])
+		}
+		if vars["aws_access_key_id"] != "foobarKey" {
+			t.Errorf("aws_access_key_id = %v, want foobarKey", vars["aws_access_key_id"])
+		}
+		if vars["sandbox_hosted_zone_id"] != "Z05256543CVIM6UZOSDUP" {
+			t.Errorf("sandbox_hosted_zone_id = %v, want Z05256543CVIM6UZOSDUP", vars["sandbox_hosted_zone_id"])
+		}
+
+		// ROSA vars
+		if vars["rosa_sandbox_name"] != "rosa-sandbox-791a8fb2" {
+			t.Errorf("rosa_sandbox_name = %v, want rosa-sandbox-791a8fb2", vars["rosa_sandbox_name"])
+		}
+		if vars["rosa_aws_account_name"] != "sandbox3104" {
+			t.Errorf("rosa_aws_account_name = %v, want sandbox3104", vars["rosa_aws_account_name"])
+		}
+		if vars["rosa_sa_client_id"] != "e2068e83-c2c9-4879-9960-3195c4cc453a" {
+			t.Errorf("rosa_sa_client_id = %v, want e2068e83-c2c9-4879-9960-3195c4cc453a", vars["rosa_sa_client_id"])
+		}
+		if vars["rosa_sa_secret"] != "foobarRosaSecret" {
+			t.Errorf("rosa_sa_secret = %v, want foobarRosaSecret", vars["rosa_sa_secret"])
+		}
+
+		// sandboxes deep copy includes both resources
+		sandboxes, ok := vars["sandboxes"].([]interface{})
+		if !ok || len(sandboxes) != 2 {
+			t.Errorf("expected sandboxes with 2 elements, got %v", vars["sandboxes"])
+		}
+	})
+
+	t.Run("multi-resource AwsSandbox + RosaSandbox with creds=false", func(t *testing.T) {
+		placement := map[string]interface{}{
+			"resources": []interface{}{
+				map[string]interface{}{
+					"kind":           "AwsSandbox",
+					"name":           "sandbox3104",
+					"account_id":     "202901899156",
+					"zone":           "sandbox3104.opentlc.com",
+					"hosted_zone_id": "Z05256543CVIM6UZOSDUP",
+					"credentials": []interface{}{
+						map[string]interface{}{
+							"kind":                  "aws_iam_key",
+							"name":                  "admin-key",
+							"aws_access_key_id":     "foobarKey",
+							"aws_secret_access_key": "foobarSecret",
+						},
+					},
+				},
+				map[string]interface{}{
+					"kind":             "RosaSandbox",
+					"name":             "rosa-sandbox-791a8fb2",
+					"aws_account_name": "sandbox3104",
+					"sa_client_id":     "e2068e83-c2c9-4879-9960-3195c4cc453a",
+					"sa_secret":        "foobarRosaSecret",
+				},
+			},
+		}
+
+		vars := extractSandboxVars(placement, false)
+
+		// AWS non-cred vars present
+		if vars["sandbox_name"] != "sandbox3104" {
+			t.Errorf("sandbox_name = %v, want sandbox3104", vars["sandbox_name"])
+		}
+		if vars["sandbox_zone"] != "sandbox3104.opentlc.com" {
+			t.Errorf("sandbox_zone = %v, want sandbox3104.opentlc.com", vars["sandbox_zone"])
+		}
+
+		// AWS cred vars absent
+		if _, ok := vars["aws_access_key_id"]; ok {
+			t.Error("aws_access_key_id should not be present with creds=false")
+		}
+
+		// ROSA non-cred vars present
+		if vars["rosa_sandbox_name"] != "rosa-sandbox-791a8fb2" {
+			t.Errorf("rosa_sandbox_name = %v, want rosa-sandbox-791a8fb2", vars["rosa_sandbox_name"])
+		}
+		if vars["rosa_aws_account_name"] != "sandbox3104" {
+			t.Errorf("rosa_aws_account_name = %v, want sandbox3104", vars["rosa_aws_account_name"])
+		}
+
+		// ROSA cred vars absent
+		if _, ok := vars["rosa_sa_client_id"]; ok {
+			t.Error("rosa_sa_client_id should not be present with creds=false")
+		}
+		if _, ok := vars["rosa_sa_secret"]; ok {
+			t.Error("rosa_sa_secret should not be present with creds=false")
+		}
+
+		// No sandboxes deep copy without creds
+		if _, ok := vars["sandboxes"]; ok {
+			t.Error("sandboxes should not be present with creds=false")
+		}
+	})
+
 	t.Run("generic kind with creds=true - raw credentials", func(t *testing.T) {
 		placement := map[string]interface{}{
 			"resources": []interface{}{
