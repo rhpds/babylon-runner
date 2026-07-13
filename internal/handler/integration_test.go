@@ -31,7 +31,7 @@ func newTestSandboxServer(t *testing.T, cfg sandboxServerConfig) *httptest.Serve
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == "POST" && r.URL.Path == "/api/v1/login":
+		case r.Method == "GET" && r.URL.Path == "/api/v1/login":
 			json.NewEncoder(w).Encode(map[string]string{"access_token": "test-access-token"})
 
 		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/api/v1/placements/"):

@@ -258,7 +258,7 @@ func TestSandboxGet(t *testing.T) {
 	t.Run("placement not found + action=provision - calls book", func(t *testing.T) {
 		sandboxServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
-			case r.Method == http.MethodPost && r.URL.Path == "/api/v1/login":
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v1/login":
 				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
 			case r.Method == http.MethodGet && r.URL.Path == "/api/v1/placements/test-uuid-123":
 				w.WriteHeader(http.StatusNotFound)
