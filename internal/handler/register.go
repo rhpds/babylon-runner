@@ -2,24 +2,13 @@ package handler
 
 import (
 	"context"
-	"log/slog"
 
 	"github.com/rhpds/babylon-runner/internal/runner"
 )
 
 // Register returns the handler map for all supported run types.
 func Register() map[string]runner.HandlerFunc {
-	// Callback handlers: immediately reschedule the action so that
-	// the next action run re-enters the main handler (e.g. handleStart)
-	// which calls checkDeployerJob.
-	callbackContinue := func(ctx context.Context, rc *runner.RunContext) error {
-		slog.Info("callback received, scheduling immediate action re-check",
-			"action", rc.ActionName(), "subject", rc.SubjectName())
-		rc.ContinueAction("0s")
-		return nil
-	}
-
-	return map[string]runner.HandlerFunc{
+	handlers := map[string]runner.HandlerFunc{
 		// Event handlers
 		"event:create": handleEventCreate,
 		"event:update": handleEventUpdate,
@@ -32,13 +21,20 @@ func Register() map[string]runner.HandlerFunc {
 		"action:stop":      handleStop,
 		"action:status":    handleStatus,
 		"action:update":    handleUpdate,
-
-		// Callback handlers
-		"action:provision:complete": callbackContinue,
-		"action:destroy:complete":   callbackContinue,
-		"action:start:complete":     callbackContinue,
-		"action:stop:complete":      callbackContinue,
-		"action:status:complete":    callbackContinue,
-		"action:update:complete":    callbackContinue,
 	}
+
+	// Register a handler for every action callback (canceled/complete/error/failed).
+	// This matches the 24 handle-action-{action}-{callback}.yaml files in the
+	// Ansible governor and ensures error/failed/canceled callbacks are dispatched
+	// instead of being dropped.
+	for _, action := range actionNames {
+		for _, status := range callbackStatuses {
+			action, status := action, status
+			handlers["action:"+action+":"+status] = func(ctx context.Context, rc *runner.RunContext) error {
+				return handleCallback(ctx, rc, action, status)
+			}
+		}
+	}
+
+	return handlers
 }

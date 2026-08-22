@@ -1,0 +1,252 @@
+= babylon_anarchy_governor → babylon-runner 1-to-1 Feature Parity Review
+:toc: macro
+:source-highlighter: highlightjs
+
+This document records a full feature-by-feature comparison of the Ansible-based
+link:https://github.com/rhpds/babylon_anarchy_governor[babylon_anarchy_governor]
+and its Go replacement
+link:https://github.com/rhpds/babylon-runner[babylon-runner], with the goal of
+verifying whether babylon-runner is a *transparent, drop-in 1-to-1 replacement*.
+
+Every Ansible task file was traced from `tasks/main.yaml` down the include tree and
+matched against the corresponding Go handler/runner code. The verified state at the
+time of writing is captured below.
+
+toc::[]
+
+== Architecture: what each side does
+
+=== Ansible governor dispatch (`tasks/main.yaml`)
+
+The runner receives an Anarchy run and dispatches based on which variables are set:
+
+* `anarchy_action_config_name` + `anarchy_action_callback_name` → `handle-action-{config}-{callback}.yaml`
+* `anarchy_action_config_name` (no callback) → `handle-action-{config}.yaml`
+* `anarchy_event_name` → `handle-event-{event}.yaml`
+* otherwise → `handle-no-action-or-event.yaml` (fails)
+
+Actions: `provision`, `destroy`, `start`, `stop`, `status`, `update`.
+Callbacks: `canceled`, `complete`, `error`, `failed` (6 × 4 = 24 handlers).
+Events: `create`, `delete`, `update`.
+
+=== Go runner dispatch (`register.go` + `runner.go`)
+
+* `subjectEvent` → `event:{name}` → event handlers
+* `action` → `action:{actionName}` → action handlers
+* `actionCallback` → `action:{actionName}:{callbackName}` → callback handlers
+
+`register.go` registers:
+
+* `event:create`, `event:update`, `event:delete`
+* `action:provision|destroy|start|stop|status|update`
+* `action:{action}:{callback}` for all 24 callbacks (see C1/C2 resolution below)
+
+== Discrepancy register
+
+Each entry below cites file:line references on both the Ansible and Go sides.
+
+=== CRITICAL
+
+==== C1. Error/failed/canceled callbacks are not registered → dispatch fails
+
+Ansible registers all 24 callback handlers. Go only registers the six
+`:complete` callbacks. When a deployer posts an `error`, `failed`, or `canceled`
+callback to the Anarchy API, the runner hits:
+
+[source,go]
+----
+no handler registered for action:{action}:{status}   // runner.go:306
+----
+
+The callback run is dropped as failed and the subject is only reconciled if the
+action is later re-polled and Tower still reports the terminal state. Ansible
+handles these callbacks directly and immediately.
+
+Affected files:
+* Ansible: `tasks/handle-action-{action}-{canceled,error,failed}.yaml`
+* Go: `internal/handler/register.go:22-43`
+
+==== C2. Callback payload data is lost
+
+Ansible's complete/error handlers consume deployer-supplied callback data and
+write it into the subject:
+
+[source,yaml]
+----
+action_provision_data:        {{ anarchy_action_callback_data.data | default({}) }}
+action_provision_message_body: {{ anarchy_action_callback_data.message_body | default([]) }}
+action_provision_messages:    {{ anarchy_action_callback_data.messages | default([]) }}
+----
+
+Go's `callbackContinue` stub (`register.go:15`) only schedules an immediate
+re-check (`ContinueAction("0s")`) and discards the callback body. The subsequent
+action re-run reconstructs this data only from Tower job *artifacts*
+(`extractProvisionData`, `tower_launch.go:623`), which is not the same as the
+callback payload. Deployer-supplied `provision_data` / `provision_messages` can
+be lost or differ from the Ansible behavior.
+
+=== HIGH
+
+==== H1. Tower polling cadence differs
+
+Ansible polls at a fixed `job_check_interval` (default `5m`,
+`defaults/main.yaml:91`) and continues at the same interval after each launch.
+Go uses a progressive backoff schedule:
+
+[source,go]
+----
+var DefaultTowerPollIntervals = []string{"20s", "30s", "1m", "1m", "2m", "5m"}  // config.go:21
+----
+
+Go polls Tower much more aggressively up front, increasing API load and diverging
+from the Ansible polling profile.
+
+=== MEDIUM
+
+==== M1. Legacy AWS DynamoDB sandbox cleanup is not ported
+
+`sandbox_cleanup.yml` falls back to `aws_sandbox_cleanup_legacy.yaml` (DynamoDB
+scan + conditional update to set `to_cleanup=true`) when the sandbox API release
+returns 404 and `pool_manager_aws_access_key_id` is set. Go's `sandboxCleanup`
+(`sandbox.go:212`) only calls `ReleasePlacement`; there is no DynamoDB fallback.
+Accounts not yet migrated to the sandbox API are left unclean.
+
+==== M2. sandbox_cleanup missing the guid/uuid asserts
+
+Ansible asserts that `guid` and `uuid` are defined and non-empty before release;
+Go only checks `uuid != ""`.
+
+==== M3. Sandbox book request diverges
+
+Ansible `sandbox_api_book.yaml` sends:
+* `ocp_console_url` annotation (read from the `console-public` ConfigMap)
+* `env_type` from governor
+* `requester_user` / `requester_email`
+* runs `validate_sandboxes_request` and `inject_var_annotations`, which also
+  normalizes `cloud_selector` / `cloud_preference` booleans to `"yes"`/`"no"`
+  strings
+
+Go's `sandboxBook` (`sandbox.go:128`) builds a subset: no `ocp_console_url`, no
+cloud-selector boolean normalization, no request validation. Booked placements
+can carry different annotations.
+
+==== M4. Sandbox API start/stop status shape differs
+
+Ansible `sandbox_api_start.yaml` / `sandbox_api_stop.yaml` record `requestID`,
+`message`, `httpStatus`, `jobStatus`, and `completeTimestamp` in
+`status.sandboxAPIJobs.{start,stop}`, and implement start-error/stop-error
+sub-blocks. Go's `sandboxStart`/`sandboxStop` (`sandbox.go:239/286`) record only
+`requestID` and `startTimestamp` and skip the error sub-blocks. The subject
+status object shape is not identical.
+
+==== M5. Sandbox queue re-check interval is hardcoded
+
+Ansible reads `sandbox_api_queue_check_interval` from vars (default `30s`). Go
+hardcodes `"30s"` in `transitionToQueued` and `checkProvisionQueue`. Equivalent
+for the default but not configurable.
+
+=== LOW
+
+* *L1.* `handle-event-create` — Go injects `guid` into the initial `job_vars`
+  (Ansible does not). Benign extra field.
+* *L2.* `handle-event-create` condition — Ansible checks `current_state is
+  undefined`; Go checks `CurrentState() == ""`. Edge-case divergence when
+  `current_state` is explicitly the empty string.
+* *L3.* `handle-event-delete` destroy-disabled check — Ansible checks
+  `deployer_entry_points.destroy == ''`; Go checks only the `DeployerDisabled`
+  flag. Diverges if the entry point is explicitly empty.
+* *L4.* `handle-no-action-or-event` / `main.yaml` assertions — Ansible asserts
+  required vars (`anarchy_governor`, `anarchy_subject_name`, callback url/token,
+  `anarchy_run_timestamp`, etc.). Go has no equivalent validation; missing fields
+  can cause silent or panicky behavior.
+* *L5.* `prevent_resource_claim_bind` — Ansible deletes / marks-unhealthy the
+  poolboy ResourceHandle on provision error/failed/canceled when
+  `delete_on_failure` is set. No obvious Go equivalent found in the reviewed
+  handler files. *Needs confirmation.*
+
+== Verified matches (implemented correctly)
+
+The following behavior is faithfully reproduced in Go:
+
+* Event create / update / delete decision logic and state transitions
+* Delete with-destroy vs without-destroy, plus `destroy-pending`/`destroyed`
+  and cancellation of `start`/`stop`/`update`
+* All six action main handlers' state routing (pending / queued / `*-ing` states)
+* Per-action deployer disable checks
+* Per-action entry-point resolution (action → generic → default)
+* Provision sandbox get/book → queued → dequeued → restart flow
+* Tower job launch flow: organization, inventory, project, execution environment,
+  instance groups, credentials, vault, extra_vars merge order, callback var
+  injection, `scm_ref_var`, `output_dir`
+* Job template name `{org} {action} {uuid}`, timeout default 10800, org default
+  `babylon`
+* Controller selection (random / first-available / balance) plus scheduler fallback
+* Retry interval table `1m,5m,10m,30m,1h,2h,4h,8h,16h,1d`
+* Cancel Tower job on delete/destroy, reconnecting via `towerHost`
+* `extract_sandboxes_vars` for Aws/Ocp/IBM/Rosa/generic kinds, including the
+  creds vs no-creds split, `main` var handling, and label incrementing
+
+== Correction notes
+
+During the review the following were initially flagged but verified as *matching*
+and are therefore not defects:
+
+* Update error/failed retry behavior (Ansible does not increment
+  `action_retry_count`; Go `handleUpdateFailure` likewise does not).
+* Start/stop error+failed increments and canceled fixed-1m retries (both match).
+* `output_dir` gating on `deployer_type == 'agnosticd'` (both match).
+
+== Status / resolution
+
+=== DONE — C1 and C2 (callback handling)
+
+Implemented in a single change:
+
+* New file `internal/handler/callback.go`:
+  * `callbackPayloadData` extracts `anarchy_action_callback_data.{data,message_body,messages}`
+    from `handler.vars` (matching the Ansible `action_provision_data`, etc.).
+  * `handleCallback` routes a callback run to the correct completion handler
+    (passing the callback payload for `provision`/`status`) or to the existing
+    failure handlers (`handleDeployerJobFailure`) for `canceled`/`error`/`failed`.
+* `internal/handler/register.go`: `Register()` now registers all 24
+  `action:{action}:{callback}` handlers instead of only the six `:complete`
+  ones. The old `callbackContinue` stub (which rescheduled at `0s` and dropped
+  the callback body) was removed.
+* Tests: `internal/handler/callback_test.go` covers payload extraction, provision
+  complete (data propagation + state), status complete, provision error, and
+  full 24-handler registration.
+
+==== Safety review of C1/C2 (race condition)
+
+The original design rescheduled callbacks (`ContinueAction("0s")`) rather than
+PATCHing the subject directly, because a fast runner could hit a PATCH 400
+"not assigned to runner". Root cause: `assign_runner_pod` in the Anarchy API set
+the runner label via a K8s replace but never refreshed its in-memory definition,
+so `runner_state` and `runner_assignments` stayed stale until the K8s watch
+caught up. The Python runner masked this with seconds of latency; the Go runner
+(~200ms) beat the watch.
+
+This root cause is now fixed on the operator side (in the `anarchy` repo,
+commit `02142e6` "fix: update local state after runner assignment"): `assign_runner_pod`
+now calls `await self.update_definition(definition)` after the replace, making
+`runner_state` and `runner_assignments` current immediately. The fix is present
+in the current `api/anarchyrun.py`.
+
+Because of this operator fix, routing callbacks directly to the completion /
+failure handlers (which call `SubjectUpdate`) is now safe. Verified:
+
+* None of the 14 completion/failure handlers invoked by `handleCallback` make
+  Tower or sandbox client calls — they only build subject PATCH bodies and set
+  result directives (`FinishAction` / `ContinueAction`).
+* The callback path does not depend on `status.towerJobs` being populated; the
+  handlers set `towerJobs` in the PATCH rather than reading it.
+* `go test -race ./...` passes across all packages.
+
+Remaining work:
+
+1. H1 (Tower polling cadence), M1 (legacy DynamoDB cleanup), M2 (guid/uuid
+   asserts), M3 (book annotations), M4 (sandbox start/stop status shape),
+   M5 (configurable queue re-check interval).
+2. L-series items: L1 (guid injection), L2 (empty-state condition), L3 (entry
+   point disable check), L4 (missing input assertions), L5 (confirm
+   `prevent_resource_claim_bind`).
