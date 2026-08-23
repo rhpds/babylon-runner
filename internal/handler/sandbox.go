@@ -12,6 +12,7 @@ import (
 	"github.com/rhpds/babylon-runner/internal/runner"
 	"github.com/rhpds/babylon-runner/internal/template"
 	"github.com/rhpds/babylon-runner/internal/types"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // SandboxResult holds the result of a sandbox API get or book operation.
@@ -172,7 +173,9 @@ func sandboxBook(ctx context.Context, rc *runner.RunContext, client *clients.San
 		)
 		annotations["owner_email"] = email
 	}
-	annotations["comment"] = "sandbox-api"
+	// comment includes the OCP console URL (best-effort), matching the Ansible
+	// sandbox_api_book.yaml which reads the console-public ConfigMap.
+	annotations["comment"] = "sandbox-api " + ocpConsoleURL(ctx, rc)
 	reqBody["annotations"] = annotations
 
 	// Add sandboxes/resources from __meta__ with var annotations injected.
@@ -208,12 +211,35 @@ func sandboxBook(ctx context.Context, rc *runner.RunContext, client *clients.San
 	}
 }
 
+// ocpConsoleURL returns the OCP console URL from the console-public ConfigMap
+// in the openshift-config-managed namespace, or "" if unavailable. Best-effort:
+// missing cluster access or ConfigMap is not fatal, matching the Ansible
+// sandbox_api_book.yaml which defaults to ” when the read fails.
+func ocpConsoleURL(ctx context.Context, rc *runner.RunContext) string {
+	if rc.Clientset == nil {
+		return ""
+	}
+	cm, err := rc.Clientset.CoreV1().ConfigMaps("openshift-config-managed").Get(ctx, "console-public", metav1.GetOptions{})
+	if err != nil {
+		slog.Debug("ocpConsoleURL: unable to read console-public ConfigMap", "error", err)
+		return ""
+	}
+	if v, ok := cm.Data["consoleURL"]; ok {
+		return v
+	}
+	return ""
+}
+
 // sandboxCleanup releases the sandbox placement.
+// It asserts that both guid and uuid are defined and non-empty, matching the
+// Ansible sandbox_cleanup.yml asserts (guid and uuid must be defined and != ”).
 func sandboxCleanup(ctx context.Context, rc *runner.RunContext) error {
 	uuid := rc.UUID()
 	if uuid == "" {
-		slog.Warn("sandboxCleanup: no uuid, skipping")
-		return nil
+		return fmt.Errorf("sandbox cleanup: uuid is not defined or empty")
+	}
+	if guid := rc.GUID(); guid == "" {
+		return fmt.Errorf("sandbox cleanup: guid is not defined or empty")
 	}
 
 	token := sandboxLoginToken(rc)
@@ -236,6 +262,8 @@ func sandboxCleanup(ctx context.Context, rc *runner.RunContext) error {
 }
 
 // sandboxStart starts the sandbox placement and polls for completion.
+// It records the request status in subject.status.sandboxAPIJobs.start,
+// matching the Ansible sandbox_api_start.yaml status shape.
 func sandboxStart(ctx context.Context, rc *runner.RunContext) error {
 	uuid := rc.UUID()
 	if uuid == "" {
@@ -247,19 +275,16 @@ func sandboxStart(ctx context.Context, rc *runner.RunContext) error {
 		return err
 	}
 
-	result, err := client.StartPlacement(ctx, uuid)
+	result, httpStatus, err := client.StartPlacement(ctx, uuid)
 	if err != nil {
 		return fmt.Errorf("start placement: %w", err)
 	}
 
-	// Extract request_id for polling.
+	// Extract request_id and message for polling / status.
 	requestID, _ := result["request_id"].(string)
-	if requestID == "" {
-		slog.Warn("sandboxStart: no request_id in response, skipping poll", "subject", rc.SubjectName())
-		return nil
-	}
+	message, _ := result["message"].(string)
 
-	// Update subject status with request info.
+	// Update subject status with request info (message + httpStatus).
 	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
@@ -269,7 +294,9 @@ func sandboxStart(ctx context.Context, rc *runner.RunContext) error {
 				"sandboxAPIJobs": map[string]interface{}{
 					"start": map[string]interface{}{
 						"requestID":      requestID,
+						"message":        message,
 						"startTimestamp": types.NowUTC(),
+						"httpStatus":     httpStatus,
 					},
 				},
 			},
@@ -279,10 +306,18 @@ func sandboxStart(ctx context.Context, rc *runner.RunContext) error {
 		return err
 	}
 
-	return pollSandboxRequest(ctx, client, requestID)
+	// No request_id means the operation completed synchronously.
+	if requestID == "" {
+		slog.Warn("sandboxStart: no request_id in response, skipping poll", "subject", rc.SubjectName())
+		return nil
+	}
+
+	return pollSandboxRequest(ctx, rc, client, requestID, "start")
 }
 
 // sandboxStop stops the sandbox placement and polls for completion.
+// It records the request status in subject.status.sandboxAPIJobs.stop,
+// matching the Ansible sandbox_api_stop.yaml status shape.
 func sandboxStop(ctx context.Context, rc *runner.RunContext) error {
 	uuid := rc.UUID()
 	if uuid == "" {
@@ -294,19 +329,16 @@ func sandboxStop(ctx context.Context, rc *runner.RunContext) error {
 		return err
 	}
 
-	result, err := client.StopPlacement(ctx, uuid)
+	result, httpStatus, err := client.StopPlacement(ctx, uuid)
 	if err != nil {
 		return fmt.Errorf("stop placement: %w", err)
 	}
 
-	// Extract request_id for polling.
+	// Extract request_id and message for polling / status.
 	requestID, _ := result["request_id"].(string)
-	if requestID == "" {
-		slog.Warn("sandboxStop: no request_id in response, skipping poll", "subject", rc.SubjectName())
-		return nil
-	}
+	message, _ := result["message"].(string)
 
-	// Update subject status with request info.
+	// Update subject status with request info (message + httpStatus).
 	if err := rc.SubjectUpdate(ctx, types.SubjectPatch{
 		Patch: types.PatchBody{
 			Metadata: &types.PatchMetadata{
@@ -316,7 +348,9 @@ func sandboxStop(ctx context.Context, rc *runner.RunContext) error {
 				"sandboxAPIJobs": map[string]interface{}{
 					"stop": map[string]interface{}{
 						"requestID":      requestID,
+						"message":        message,
 						"startTimestamp": types.NowUTC(),
+						"httpStatus":     httpStatus,
 					},
 				},
 			},
@@ -326,12 +360,21 @@ func sandboxStop(ctx context.Context, rc *runner.RunContext) error {
 		return err
 	}
 
-	return pollSandboxRequest(ctx, client, requestID)
+	// No request_id means the operation completed synchronously.
+	if requestID == "" {
+		slog.Warn("sandboxStop: no request_id in response, skipping poll", "subject", rc.SubjectName())
+		return nil
+	}
+
+	return pollSandboxRequest(ctx, rc, client, requestID, "stop")
 }
 
 // pollSandboxRequest polls a sandbox API async request until it completes.
-// Uses httputil.PollWithContext for cancellation-aware polling.
-func pollSandboxRequest(ctx context.Context, client *clients.SandboxAPIClient, requestID string) error {
+// Uses httputil.PollWithContext for cancellation-aware polling. On terminal
+// success it records jobStatus=successful and a completeTimestamp in
+// subject.status.sandboxAPIJobs.{action}; on terminal failure it records the
+// failing jobStatus, matching the Ansible sandbox_api_start/stop.yaml behavior.
+func pollSandboxRequest(ctx context.Context, rc *runner.RunContext, client *clients.SandboxAPIClient, requestID, action string) error {
 	return httputil.PollWithContext(ctx, 5*time.Second, 120, func() (bool, error) {
 		status, err := client.GetRequestStatus(ctx, requestID)
 		if err != nil {
@@ -341,17 +384,42 @@ func pollSandboxRequest(ctx context.Context, client *clients.SandboxAPIClient, r
 		}
 
 		state, _ := status["status"].(string)
+		ts := types.NowUTC()
 		switch state {
 		case "success", "complete":
-			slog.Info("pollSandboxRequest: request completed successfully", "requestID", requestID)
-			return true, nil
+			slog.Info("pollSandboxRequest: request completed successfully", "requestID", requestID, "action", action)
+			return true, recordSandboxJobOutcome(ctx, rc, action, map[string]interface{}{
+				"completeTimestamp": ts,
+				"jobStatus":         "successful",
+			})
 		case "error", "failed":
 			msg, _ := status["message"].(string)
+			_ = recordSandboxJobOutcome(ctx, rc, action, map[string]interface{}{
+				"completeTimestamp": ts,
+				"jobStatus":         state,
+				"message":           msg,
+			})
 			return true, fmt.Errorf("sandbox request %s failed: %s", requestID, msg)
 		default:
-			slog.Info("pollSandboxRequest: request still in progress", "requestID", requestID, "status", state)
+			slog.Info("pollSandboxRequest: request still in progress", "requestID", requestID, "status", state, "action", action)
 			return false, nil
 		}
+	})
+}
+
+// recordSandboxJobOutcome merges terminal outcome fields into
+// subject.status.sandboxAPIJobs.{action} and returns nil on success, or the
+// error so the caller can propagate a failure.
+func recordSandboxJobOutcome(ctx context.Context, rc *runner.RunContext, action string, fields map[string]interface{}) error {
+	return rc.SubjectUpdate(ctx, types.SubjectPatch{
+		Patch: types.PatchBody{
+			Status: map[string]interface{}{
+				"sandboxAPIJobs": map[string]interface{}{
+					action: fields,
+				},
+			},
+			SkipUpdateProcessing: true,
+		},
 	})
 }
 
@@ -409,7 +477,32 @@ func copyWithInjectedAnnotations(sb map[string]interface{}) map[string]interface
 	if len(ann) > 0 {
 		cp["annotations"] = ann
 	}
+
+	// Normalize boolean values in cloud_selector and cloud_preference to
+	// "yes"/"no" strings (YAML parses unquoted true/false as booleans, but the
+	// sandbox API requires string values). Matches the Python inject_var_annotations.
+	normalizeBoolToYesNo(cp, "cloud_selector")
+	normalizeBoolToYesNo(cp, "cloud_preference")
+
 	return cp
+}
+
+// normalizeBoolToYesNo rewrites boolean values in the named sub-map of sb to
+// the strings "yes"/"no", leaving non-boolean values untouched.
+func normalizeBoolToYesNo(sb map[string]interface{}, key string) {
+	sub, _ := sb[key].(map[string]interface{})
+	if sub == nil {
+		return
+	}
+	for k, v := range sub {
+		if b, ok := v.(bool); ok {
+			if b {
+				sub[k] = "yes"
+			} else {
+				sub[k] = "no"
+			}
+		}
+	}
 }
 
 // injectVarAnnotations copies the "var" and "namespace_suffix" fields

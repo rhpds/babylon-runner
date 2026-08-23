@@ -36,6 +36,7 @@ type Config struct {
 	TowerCACert          string
 	ActionRetryIntervals []string
 	TowerPollIntervals   []string
+	SandboxQueueCheck    string
 	MetricsPort          int
 	MaxPollFailures      int
 }
@@ -81,6 +82,10 @@ func ConfigFromEnv() (Config, error) {
 	cfg.TowerCACert = os.Getenv("TOWER_CA_CERT")
 	cfg.ActionRetryIntervals = envStringSlice("ACTION_RETRY_INTERVALS", DefaultActionRetryIntervals)
 	cfg.TowerPollIntervals = envStringSlice("TOWER_POLL_INTERVALS", DefaultTowerPollIntervals)
+	cfg.SandboxQueueCheck = os.Getenv("SANDBOX_API_QUEUE_CHECK_INTERVAL")
+	if cfg.SandboxQueueCheck == "" {
+		cfg.SandboxQueueCheck = "30s"
+	}
 	cfg.MetricsPort = envInt("METRICS_PORT", 9093)
 	cfg.MaxPollFailures = envInt("MAX_POLL_FAILURES", 10)
 	return cfg, nil

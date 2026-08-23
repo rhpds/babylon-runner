@@ -20,15 +20,16 @@ type RunContext struct {
 	Result               types.RunResult
 	AnarchyClient        *clients.AnarchyClient
 	Clientset            kubernetes.Interface
-	TowerBaseURL         string // overridden in tests to inject mock Tower server
-	SandboxBaseURL       string // overridden in tests
-	DefaultSandboxAPIURL string // from Config; used as fallback when governor vars are absent
+	TowerBaseURL         string                     // overridden in tests to inject mock Tower server
+	SandboxBaseURL       string                     // overridden in tests
+	DefaultSandboxAPIURL string                     // from Config; used as fallback when governor vars are absent
 	SandboxClientOpts    []clients.SandboxAPIOption // optional; used in tests to disable retries
 	TowerTLSConfig       *tls.Config
 	TowerClientPool      *clients.TowerClientPool
 	SecretCache          *secrets.Cache
 	ActionRetryIntervals []string
 	TowerPollIntervals   []string
+	SandboxQueueCheck    string
 }
 
 // --- Convenience accessors (typed payloads make these trivial) ---

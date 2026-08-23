@@ -28,15 +28,15 @@ type HandlerFunc func(ctx context.Context, rc *RunContext) error
 // Runner implements the main polling loop that fetches runs from the
 // Anarchy API, dispatches them to handlers, and posts results.
 type Runner struct {
-	config         Config
-	client         *http.Client
-	anarchy        *clients.AnarchyClient
-	clientset      kubernetes.Interface
-	handlers       map[string]HandlerFunc
-	postRetryDelay time.Duration // base delay between POST retries; 0 in tests
-	towerTLSConfig *tls.Config
-	towerPool      *clients.TowerClientPool
-	secretCache    *secrets.Cache
+	config            Config
+	client            *http.Client
+	anarchy           *clients.AnarchyClient
+	clientset         kubernetes.Interface
+	handlers          map[string]HandlerFunc
+	postRetryDelay    time.Duration // base delay between POST retries; 0 in tests
+	towerTLSConfig    *tls.Config
+	towerPool         *clients.TowerClientPool
+	secretCache       *secrets.Cache
 	ready             atomic.Bool
 	consecutiveErrors atomic.Int32
 }
@@ -133,6 +133,7 @@ func (r *Runner) pollOnce(ctx context.Context) error {
 		SecretCache:          r.secretCache,
 		ActionRetryIntervals: r.config.ActionRetryIntervals,
 		TowerPollIntervals:   r.config.TowerPollIntervals,
+		SandboxQueueCheck:    r.config.SandboxQueueCheck,
 		Result: types.RunResult{
 			Status: "successful",
 		},

@@ -60,7 +60,7 @@ func transitionToQueued(ctx context.Context, rc *runner.RunContext) error {
 	}); err != nil {
 		return err
 	}
-	rc.ContinueAction("30s")
+	rc.ContinueAction(rc.SandboxQueueCheck)
 	return nil
 }
 
@@ -89,7 +89,7 @@ func completeProvisionNoDeployer(ctx context.Context, rc *runner.RunContext, san
 				"actions": map[string]interface{}{
 					"provision": map[string]interface{}{
 						"completeTimestamp": ts,
-						"state":            "successful",
+						"state":             "successful",
 					},
 				},
 			},
@@ -195,13 +195,13 @@ func handleProvisionComplete(ctx context.Context, rc *runner.RunContext, provisi
 				"actions": map[string]interface{}{
 					"provision": map[string]interface{}{
 						"completeTimestamp": ts,
-						"state":            "successful",
+						"state":             "successful",
 					},
 				},
 				"towerJobs": map[string]interface{}{
 					"provision": map[string]interface{}{
 						"completeTimestamp": ts,
-						"jobStatus":        "successful",
+						"jobStatus":         "successful",
 					},
 				},
 			},
@@ -235,7 +235,7 @@ func handleProvisionError(ctx context.Context, rc *runner.RunContext) error {
 				"actions": map[string]interface{}{
 					"provision": map[string]interface{}{
 						"completeTimestamp": ts,
-						"state":            "error",
+						"state":             "error",
 					},
 				},
 				"towerJobs": map[string]interface{}{
@@ -284,7 +284,7 @@ func handleProvisionFailed(ctx context.Context, rc *runner.RunContext) error {
 				"actions": map[string]interface{}{
 					"provision": map[string]interface{}{
 						"completeTimestamp": ts,
-						"state":            "failed",
+						"state":             "failed",
 					},
 				},
 				"towerJobs": map[string]interface{}{
@@ -323,13 +323,13 @@ func handleProvisionCanceled(ctx context.Context, rc *runner.RunContext) error {
 				"actions": map[string]interface{}{
 					"provision": map[string]interface{}{
 						"completeTimestamp": ts,
-						"state":            "canceled",
+						"state":             "canceled",
 					},
 				},
 				"towerJobs": map[string]interface{}{
 					"provision": map[string]interface{}{
 						"completeTimestamp": ts,
-						"jobStatus":        "canceled",
+						"jobStatus":         "canceled",
 					},
 				},
 			},
@@ -432,7 +432,7 @@ func checkProvisionQueue(ctx context.Context, rc *runner.RunContext) error {
 		}); err != nil {
 			return err
 		}
-		rc.ContinueAction("30s")
+		rc.ContinueAction(rc.SandboxQueueCheck)
 		return nil
 
 	default:

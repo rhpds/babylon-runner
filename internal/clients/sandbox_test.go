@@ -184,9 +184,12 @@ func TestSandboxAPIStartPlacement(t *testing.T) {
 	client := NewSandboxAPIClient(server.URL, "login-token", WithNoRetries())
 	defer client.Close(context.Background())
 
-	result, err := client.StartPlacement(context.Background(), "uuid-123")
+	result, status, err := client.StartPlacement(context.Background(), "uuid-123")
 	if err != nil {
 		t.Fatalf("StartPlacement returned error: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Errorf("status = %d, want %d", status, http.StatusOK)
 	}
 	if result["status"] != "starting" {
 		t.Errorf("status = %v, want %q", result["status"], "starting")
@@ -220,9 +223,12 @@ func TestSandboxAPIStopPlacement(t *testing.T) {
 	client := NewSandboxAPIClient(server.URL, "login-token", WithNoRetries())
 	defer client.Close(context.Background())
 
-	result, err := client.StopPlacement(context.Background(), "uuid-123")
+	result, status, err := client.StopPlacement(context.Background(), "uuid-123")
 	if err != nil {
 		t.Fatalf("StopPlacement returned error: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Errorf("status = %d, want %d", status, http.StatusOK)
 	}
 	if result["status"] != "stopping" {
 		t.Errorf("status = %v, want %q", result["status"], "stopping")
@@ -419,7 +425,7 @@ func TestSandboxAPIClientRetry(t *testing.T) {
 		},
 	)
 
-	result, err := client.StartPlacement(context.Background(), "test-uuid")
+	result, _, err := client.StartPlacement(context.Background(), "test-uuid")
 	if err != nil {
 		t.Fatalf("StartPlacement failed: %v", err)
 	}

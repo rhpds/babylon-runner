@@ -242,11 +242,31 @@ failure handlers (which call `SubjectUpdate`) is now safe. Verified:
   handlers set `towerJobs` in the PATCH rather than reading it.
 * `go test -race ./...` passes across all packages.
 
-Remaining work:
+=== DONE — M2, M3, M4, M5 (sandbox API parity)
 
-1. H1 (Tower polling cadence), M1 (legacy DynamoDB cleanup), M2 (guid/uuid
-   asserts), M3 (book annotations), M4 (sandbox start/stop status shape),
-   M5 (configurable queue re-check interval).
+* *M2* `sandboxCleanup` now asserts both `guid` and `uuid` are defined and
+  non-empty (returning an error otherwise), matching the Ansible
+  `sandbox_cleanup.yml` asserts.
+* *M3* `sandboxBook` now includes the OCP console URL in the `comment`
+  annotation (best-effort read of the `console-public` ConfigMap via the
+  clientset) and normalizes `cloud_selector` / `cloud_preference` booleans to
+  `"yes"` / `"no"` strings, matching the Python `inject_var_annotations` filter.
+* *M4* `sandboxStart` / `sandboxStop` now record `message` and `httpStatus` in
+  the initial `status.sandboxAPIJobs.{start,stop}` update, and the poll loop
+  records `completeTimestamp` / `jobStatus` (and `message` on failure) on
+  terminal outcome. The sandbox client `StartPlacement` / `StopPlacement` now
+  return the HTTP status code.
+* *M5* The provision queue re-check interval is now configurable via the
+  `SANDBOX_API_QUEUE_CHECK_INTERVAL` env var (default `30s`), replacing the
+  hardcoded `"30s"`. Wired through `Config` → `RunContext.SandboxQueueCheck`.
+
+* *M1 (dropped)* The legacy AWS DynamoDB sandbox cleanup fallback is intentionally
+  not ported.
+
+=== Remaining work
+
+1. H1 (Tower polling cadence) — tracked in Jira as
+   https://redhat.atlassian.net/browse/GPTEINFRA-17760[GPTEINFRA-17760].
 2. L-series items: L1 (guid injection), L2 (empty-state condition), L3 (entry
    point disable check), L4 (missing input assertions), L5 (confirm
    `prevent_resource_claim_bind`).
