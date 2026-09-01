@@ -389,6 +389,148 @@ func TestSandboxGet(t *testing.T) {
 	})
 }
 
+// --- TestValidateSandboxesRequest ---
+
+// TestValidateSandboxesRequest mirrors the Python validate_sandboxes_request
+// filter test cases (babylon.py).
+func TestValidateSandboxesRequest(t *testing.T) {
+	tests := []struct {
+		name       string
+		sandboxes  []interface{}
+		wantResult string
+	}{
+		{
+			name:       "empty request - error",
+			sandboxes:  []interface{}{},
+			wantResult: "ERROR: At least one sandbox is required in the sandboxes request",
+		},
+		{
+			name: "single sandbox - OK",
+			sandboxes: []interface{}{
+				map[string]interface{}{"kind": "AwsSandbox"},
+			},
+			wantResult: "OK",
+		},
+		{
+			name: "missing kind - error",
+			sandboxes: []interface{}{
+				map[string]interface{}{"var": "a"},
+			},
+			wantResult: "ERROR: Sandbox kind is required in the sandboxes request",
+		},
+		{
+			name: "same kind with distinct vars - OK",
+			sandboxes: []interface{}{
+				map[string]interface{}{"kind": "OcpSandbox", "var": "main"},
+				map[string]interface{}{"kind": "OcpSandbox", "var": "second"},
+			},
+			wantResult: "OK",
+		},
+		{
+			name: "different kinds without vars - OK",
+			sandboxes: []interface{}{
+				map[string]interface{}{"kind": "AwsSandbox"},
+				map[string]interface{}{"kind": "OcpSandbox"},
+			},
+			wantResult: "OK",
+		},
+		{
+			name: "duplicated var - error",
+			sandboxes: []interface{}{
+				map[string]interface{}{"kind": "OcpSandbox", "var": "main"},
+				map[string]interface{}{"kind": "AwsSandbox", "var": "main"},
+			},
+			wantResult: "ERROR: Variable 'main' is duplicated",
+		},
+		{
+			name: "second sandbox of kind without var - error",
+			sandboxes: []interface{}{
+				map[string]interface{}{"kind": "AwsSandbox"},
+				map[string]interface{}{"kind": "AwsSandbox"},
+			},
+			wantResult: "ERROR: missing 'var' key for second sandbox of kind AwsSandbox",
+		},
+		{
+			name: "annotations of strings - OK",
+			sandboxes: []interface{}{
+				map[string]interface{}{
+					"kind":        "AwsSandbox",
+					"annotations": map[string]interface{}{"foo": "bar"},
+				},
+			},
+			wantResult: "OK",
+		},
+		{
+			name: "annotations not a dict - error",
+			sandboxes: []interface{}{
+				map[string]interface{}{
+					"kind":        "AwsSandbox",
+					"annotations": "not-a-dict",
+				},
+			},
+			wantResult: "ERROR: Annotations should be a dict for sandbox of kind AwsSandbox",
+		},
+		{
+			name: "annotations value not a string - error",
+			sandboxes: []interface{}{
+				map[string]interface{}{
+					"kind":        "AwsSandbox",
+					"annotations": map[string]interface{}{"foo": 42},
+				},
+			},
+			wantResult: "ERROR: Annotations values should be strings for sandbox of kind AwsSandbox",
+		},
+		{
+			name: "cloud_selector strings - OK",
+			sandboxes: []interface{}{
+				map[string]interface{}{
+					"kind":           "AwsSandbox",
+					"cloud_selector": map[string]interface{}{"version": "4.15"},
+				},
+			},
+			wantResult: "OK",
+		},
+		{
+			name: "cloud_selector booleans accepted - OK",
+			sandboxes: []interface{}{
+				map[string]interface{}{
+					"kind":           "AwsSandbox",
+					"cloud_selector": map[string]interface{}{"gpu": true},
+				},
+			},
+			wantResult: "OK",
+		},
+		{
+			name: "cloud_selector not a dict - error",
+			sandboxes: []interface{}{
+				map[string]interface{}{
+					"kind":           "AwsSandbox",
+					"cloud_selector": "not-a-dict",
+				},
+			},
+			wantResult: "ERROR: cloud_selector should be a dict for sandbox of kind AwsSandbox",
+		},
+		{
+			name: "cloud_preference value not string or bool - error",
+			sandboxes: []interface{}{
+				map[string]interface{}{
+					"kind":             "AwsSandbox",
+					"cloud_preference": map[string]interface{}{"version": 4.15},
+				},
+			},
+			wantResult: "ERROR: cloud_preference values should be strings for sandbox of kind AwsSandbox",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := validateSandboxesRequest(tt.sandboxes); got != tt.wantResult {
+				t.Errorf("validateSandboxesRequest() = %q, want %q", got, tt.wantResult)
+			}
+		})
+	}
+}
+
 // --- TestSandboxBook ---
 
 // newTestSandboxClient creates a SandboxAPIClient pointing at the given
@@ -556,6 +698,53 @@ func TestSandboxBook(t *testing.T) {
 
 		if result.Status != "queued" {
 			t.Errorf("Status = %s, want 'queued'", result.Status)
+		}
+	})
+
+	t.Run("invalid sandboxes request - finishes action failed without booking", func(t *testing.T) {
+		var bookCalled bool
+		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+			"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+			},
+			"/api/v1/placements": func(w http.ResponseWriter, r *http.Request) {
+				bookCalled = true
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{})
+			},
+		})
+		defer sandboxServer.Close()
+
+		anarchyServer, _ := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
+		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+		rc.Payload.Governor.Spec.Vars.Meta = &types.Meta{
+			AWSSandboxed: true,
+			Sandboxes: []interface{}{
+				map[string]interface{}{"kind": "AwsSandbox"},
+				map[string]interface{}{"kind": "AwsSandbox"},
+			},
+		}
+
+		client := newTestSandboxClient(sandboxServer.URL)
+		result, err := sandboxBook(context.Background(), rc, client)
+		if err != nil {
+			t.Fatalf("sandboxBook() error = %v, want nil (failure is final, not retried)", err)
+		}
+
+		if result.Status != "invalid-request" {
+			t.Errorf("Status = %s, want 'invalid-request'", result.Status)
+		}
+		if bookCalled {
+			t.Error("expected no POST to /placements for an invalid request")
+		}
+		if rc.Result.FinishAction == nil {
+			t.Fatal("expected FinishAction to be set")
+		}
+		if rc.Result.FinishAction.State != "failed" {
+			t.Errorf("FinishAction state = %q, want 'failed'", rc.Result.FinishAction.State)
 		}
 	})
 
@@ -956,6 +1145,109 @@ func TestSandboxStop(t *testing.T) {
 			t.Fatal("expected error when login fails, got nil")
 		}
 	})
+}
+
+// TestSandboxStopRecordsPrePollFailure verifies that a failed stop placement
+// request still records jobStatus=error (with httpStatus and message) in
+// subject.status.sandboxAPIJobs.stop, matching the Ansible
+// sandbox_api_stop.yaml rescue block.
+func TestSandboxStopRecordsPrePollFailure(t *testing.T) {
+	sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+		"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+		},
+		"/api/v1/placements/test-uuid-123/stop": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		},
+	})
+	defer sandboxServer.Close()
+
+	anarchyServer, calls := newTestAnarchyServer(t)
+	defer anarchyServer.Close()
+
+	rc := newTestRunContext(t, anarchyServer)
+	withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+
+	err := sandboxStop(context.Background(), rc)
+	if err == nil {
+		t.Fatal("expected error when stop placement fails, got nil")
+	}
+
+	var record map[string]interface{}
+	for _, c := range *calls {
+		if c.Method != http.MethodPatch {
+			continue
+		}
+		patch, _ := c.Body["patch"].(map[string]interface{})
+		status, _ := patch["status"].(map[string]interface{})
+		jobs, _ := status["sandboxAPIJobs"].(map[string]interface{})
+		if stop, _ := jobs["stop"].(map[string]interface{}); stop != nil {
+			record = stop
+		}
+	}
+	if record == nil {
+		t.Fatal("expected sandboxAPIJobs.stop failure record in subject status")
+	}
+	if record["jobStatus"] != "error" {
+		t.Errorf("jobStatus = %v, want error", record["jobStatus"])
+	}
+	if record["httpStatus"] != float64(http.StatusInternalServerError) {
+		t.Errorf("httpStatus = %v, want %d", record["httpStatus"], http.StatusInternalServerError)
+	}
+	if msg, _ := record["message"].(string); !strings.Contains(msg, "stop placement") {
+		t.Errorf("message = %q, want it to contain 'stop placement'", msg)
+	}
+}
+
+// TestSandboxStartRecordsPrePollFailure is the start counterpart of
+// TestSandboxStopRecordsPrePollFailure, matching the sandbox_api_start.yaml
+// rescue block.
+func TestSandboxStartRecordsPrePollFailure(t *testing.T) {
+	sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+		"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+		},
+		"/api/v1/placements/test-uuid-123/start": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		},
+	})
+	defer sandboxServer.Close()
+
+	anarchyServer, calls := newTestAnarchyServer(t)
+	defer anarchyServer.Close()
+
+	rc := newTestRunContext(t, anarchyServer)
+	withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+
+	err := sandboxStart(context.Background(), rc)
+	if err == nil {
+		t.Fatal("expected error when start placement fails, got nil")
+	}
+
+	var record map[string]interface{}
+	for _, c := range *calls {
+		if c.Method != http.MethodPatch {
+			continue
+		}
+		patch, _ := c.Body["patch"].(map[string]interface{})
+		status, _ := patch["status"].(map[string]interface{})
+		jobs, _ := status["sandboxAPIJobs"].(map[string]interface{})
+		if start, _ := jobs["start"].(map[string]interface{}); start != nil {
+			record = start
+		}
+	}
+	if record == nil {
+		t.Fatal("expected sandboxAPIJobs.start failure record in subject status")
+	}
+	if record["jobStatus"] != "error" {
+		t.Errorf("jobStatus = %v, want error", record["jobStatus"])
+	}
+	if record["httpStatus"] != float64(http.StatusInternalServerError) {
+		t.Errorf("httpStatus = %v, want %d", record["httpStatus"], http.StatusInternalServerError)
+	}
+	if msg, _ := record["message"].(string); !strings.Contains(msg, "start placement") {
+		t.Errorf("message = %q, want it to contain 'start placement'", msg)
+	}
 }
 
 // --- TestPollSandboxRequest ---

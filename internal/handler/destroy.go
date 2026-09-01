@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/rhpds/babylon-runner/internal/runner"
@@ -63,8 +64,14 @@ func handleDestroy(ctx context.Context, rc *runner.RunContext) error {
 // handleDestroyCatchAll performs sandbox cleanup and subject deletion for the
 // destroy catch-all path (error states or deployer disabled).
 func handleDestroyCatchAll(ctx context.Context, rc *runner.RunContext) error {
+	// A cleanup failure is propagated so the run finishes failed and Anarchy
+	// re-dispatches it, matching the Ansible catch-all (handle-action-destroy.yaml):
+	// sandbox_cleanup.yml is fatal (release uri retries until success), so a
+	// failing cleanup kills the play before anarchy_subject_delete and the run
+	// is retried. Swallowing here would delete the subject and leak the
+	// placement.
 	if err := sandboxCleanup(ctx, rc); err != nil {
-		slog.Error("handleDestroyCatchAll: sandbox cleanup error", "subject", rc.SubjectName(), "error", err)
+		return fmt.Errorf("sandbox cleanup: %w", err)
 	}
 	rc.DeleteSubject(true)
 	rc.FinishAction("successful")
@@ -103,10 +110,14 @@ func runDestroy(ctx context.Context, rc *runner.RunContext) error {
 // handleDestroyComplete finalizes a successful destroy.
 func handleDestroyComplete(ctx context.Context, rc *runner.RunContext) error {
 	slog.Info("destroy complete", "subject", rc.SubjectName())
-	// Sandbox API cleanup: release placement.
+	// Sandbox API cleanup: release placement. An error is propagated so the
+	// run finishes failed and Anarchy re-dispatches it, matching the Ansible
+	// governor where a failed sandbox_cleanup.yml play fails the run and the
+	// release is retried. Without this, a transient sandbox API outage would
+	// leak the placement (never released) while the subject is still deleted.
 	if rc.SandboxAPIInUse() {
 		if err := sandboxCleanup(ctx, rc); err != nil {
-			slog.Error("handleDestroyComplete: sandbox cleanup error", "subject", rc.SubjectName(), "error", err)
+			return fmt.Errorf("sandbox cleanup: %w", err)
 		}
 	}
 

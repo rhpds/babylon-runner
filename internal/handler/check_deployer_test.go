@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -88,6 +89,54 @@ func TestHandleDestroyFailureCanceled(t *testing.T) {
 	// Should NOT have finished (destroy always retries).
 	if rc.Result.FinishAction != nil {
 		t.Error("expected FinishAction NOT to be called (destroy always retries)")
+	}
+}
+
+// TestHandleStopFailureSandboxStopParity verifies the sandbox API stop side
+// effect matches the Ansible governor: stop-error/stop-failed include
+// sandbox_api_stop.yaml, but stop-canceled deliberately does not.
+func TestHandleStopFailureSandboxStopParity(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     string
+		wantStoped bool
+	}{
+		{name: "error - sandbox stop called", status: "error", wantStoped: true},
+		{name: "failed - sandbox stop called", status: "failed", wantStoped: true},
+		{name: "canceled - sandbox stop NOT called", status: "canceled", wantStoped: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stopCalled bool
+			sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+				"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+					json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+				},
+				"/api/v1/placements/test-uuid-123/stop": func(w http.ResponseWriter, r *http.Request) {
+					stopCalled = true
+					json.NewEncoder(w).Encode(map[string]interface{}{"request_id": "req-1"})
+				},
+				"/api/v1/requests/req-1/status": func(w http.ResponseWriter, r *http.Request) {
+					json.NewEncoder(w).Encode(map[string]interface{}{"status": "complete"})
+				},
+			})
+			defer sandboxServer.Close()
+
+			anarchyServer, _ := newTestAnarchyServer(t)
+			defer anarchyServer.Close()
+
+			rc := newTestRunContext(t, anarchyServer)
+			withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+			rc.Payload.Action = &types.Action{Spec: types.ActionSpec{Action: "stop"}}
+
+			if err := handleStopFailure(context.Background(), rc, tt.status); err != nil {
+				t.Fatalf("handleStopFailure returned error: %v", err)
+			}
+
+			if stopCalled != tt.wantStoped {
+				t.Errorf("sandbox stop called = %v, want %v", stopCalled, tt.wantStoped)
+			}
+		})
 	}
 }
 

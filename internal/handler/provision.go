@@ -135,6 +135,11 @@ func runProvision(ctx context.Context, rc *runner.RunContext) error {
 		switch sandboxResult.Status {
 		case "error":
 			return handleProvisionError(ctx, rc)
+		case "invalid-request":
+			// sandboxBook already finished the action as failed (matching
+			// the Ansible fail + finish_action(failed) + end_play); do not
+			// retry or launch Tower.
+			return nil
 		case "queued":
 			return transitionToQueued(ctx, rc)
 		}

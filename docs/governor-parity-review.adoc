@@ -195,6 +195,15 @@ and are therefore not defects:
   `action_retry_count`; Go `handleUpdateFailure` likewise does not).
 * Start/stop error+failed increments and canceled fixed-1m retries (both match).
 * `output_dir` gating on `deployer_type == 'agnosticd'` (both match).
+* `validate_sandboxes_request` accepts var-only requests (sandboxes of a kind
+  that all carry a `var`, with no main sandbox). The governor runtime filter
+  (`filter_plugins/babylon.py`) has no main-sandbox check and returns `OK`;
+  the Go port matches it exactly. The stricter variant with a "Main sandbox
+  is missing for kind" check lives in the catalog-side copy
+  (`agnosticv/.tests/babylon_checks.py`), which has itself drifted from the
+  governor (it also lacks the `cloud_preference` validation). Aligning the
+  two Python copies is an ecosystem follow-up, not a babylon-runner parity
+  gap.
 
 == Status / resolution
 
@@ -235,27 +244,70 @@ in the current `api/anarchyrun.py`.
 Because of this operator fix, routing callbacks directly to the completion /
 failure handlers (which call `SubjectUpdate`) is now safe. Verified:
 
-* None of the 14 completion/failure handlers invoked by `handleCallback` make
-  Tower or sandbox client calls — they only build subject PATCH bodies and set
-  result directives (`FinishAction` / `ContinueAction`).
+* 12 of the 14 completion/failure handlers invoked by `handleCallback` only
+  build subject PATCH bodies and set result directives (`FinishAction` /
+  `ContinueAction`). The two exceptions both call the sandbox API, mirroring
+  their Ansible counterparts: `handleStopFailure` calls `sandboxStop` (except
+  for `canceled`, see the note below) and `handleDestroyComplete` calls
+  `sandboxCleanup` — the Ansible stop-error/stop-failed handlers include
+  `sandbox_api_stop.yaml` and the destroy-complete flow runs
+  `sandbox_cleanup.yml`. Neither exception launches Tower jobs, and both
+  sandbox calls are idempotent, so a re-dispatched run (see the destroy
+  cleanup note below) is safe.
 * The callback path does not depend on `status.towerJobs` being populated; the
   handlers set `towerJobs` in the PATCH rather than reading it.
 * `go test -race ./...` passes across all packages.
+
+===== stop:canceled does not force a sandbox API stop
+
+The Ansible `handle-action-stop-canceled.yaml` deliberately does *not* include
+`sandbox_api_stop.yaml`, while the error/failed stop handlers do ("Stop
+instances using the sandbox API to save costs"). A `canceled` callback means
+the Tower/AAP deployer job was deliberately aborted — an Anarchy *action*
+cancellation never fires callbacks at all, because the operator finishes the
+action directly without creating a callback run. The governor therefore treats
+canceled as intentional abandonment across all six actions: record state,
+then either retry the same deployer action or pivot to the opposite one, with
+no side effects. Forcing a sandbox API stop on `stop:canceled` would stop
+cloud resources in the common case where the job was canceled because the
+direction changed (`desired_state` flipped back to `started`) — a disruptive
+stop immediately followed by a start. When `desired_state` stays `stopped`,
+the handler retries the deployer stop after 1m, which bounds any cost window.
+`handleStopFailure` accordingly skips `sandboxStop` when the status is
+`canceled`.
 
 === DONE — M2, M3, M4, M5 (sandbox API parity)
 
 * *M2* `sandboxCleanup` now asserts both `guid` and `uuid` are defined and
   non-empty (returning an error otherwise), matching the Ansible
-  `sandbox_cleanup.yml` asserts.
+  `sandbox_cleanup.yml` asserts. Cleanup errors are now propagated on all
+  terminal destroy paths — destroy-complete (`handleDestroyComplete`), the
+  destroy catch-all (`handleDestroyCatchAll`), and delete-without-destroy
+  (`handleEventDeleteWithoutDestroy`) — so the run finishes failed and
+  Anarchy re-dispatches it. This matches the Ansible semantics: the
+  `sandbox_cleanup.yml` release task is fatal (`until: r_del is succeeded`),
+  so a failing cleanup kills the play before `anarchy_subject_delete` and
+  the run is retried; the subject is only deleted once the placement is
+  released.
 * *M3* `sandboxBook` now includes the OCP console URL in the `comment`
   annotation (best-effort read of the `console-public` ConfigMap via the
-  clientset) and normalizes `cloud_selector` / `cloud_preference` booleans to
-  `"yes"` / `"no"` strings, matching the Python `inject_var_annotations` filter.
+  clientset), normalizes `cloud_selector` / `cloud_preference` booleans to
+  `"yes"` / `"no"` strings, matching the Python `inject_var_annotations`
+  filter, and validates the resolved `__meta__.sandboxes` resources with
+  `validateSandboxesRequest` (a Go port of the Python
+  `validate_sandboxes_request` filter from `babylon.py`), finishing the
+  action as failed without retry on an invalid request, matching the
+  `sandbox_api_book.yaml` validate task (fail + finish_action(failed) +
+  end_play).
 * *M4* `sandboxStart` / `sandboxStop` now record `message` and `httpStatus` in
   the initial `status.sandboxAPIJobs.{start,stop}` update, and the poll loop
   records `completeTimestamp` / `jobStatus` (and `message` on failure) on
-  terminal outcome. The sandbox client `StartPlacement` / `StopPlacement` now
-  return the HTTP status code.
+  terminal outcome. Pre-poll failures (missing uuid, placement start/stop
+  request failure, or the initial status update) now record
+  `jobStatus: error` with `httpStatus` and `message` via
+  `recordSandboxActionFailure`, matching the rescue blocks in the Ansible
+  `sandbox_api_start.yaml` / `sandbox_api_stop.yaml`. The sandbox client
+  `StartPlacement` / `StopPlacement` now return the HTTP status code.
 * *M5* The provision queue re-check interval is now configurable via the
   `SANDBOX_API_QUEUE_CHECK_INTERVAL` env var (default `30s`), replacing the
   hardcoded `"30s"`. Wired through `Config` → `RunContext.SandboxQueueCheck`.

@@ -31,10 +31,11 @@ func TestHandleStartDeployerDisabled(t *testing.T) {
 		t.Fatalf("handleStart returned error: %v", err)
 	}
 
-	// Should have 1 call: set startTimestamp only.
+	// Should have 2 calls: set startTimestamp, then record the sandbox start
+	// failure (jobStatus=error, matching the Ansible rescue block).
 	// Sandbox error with deployer disabled -> FinishAction("error").
-	if len(*calls) != 1 {
-		t.Fatalf("expected 1 call, got %d", len(*calls))
+	if len(*calls) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(*calls))
 	}
 
 	// First call: set startTimestamp.
@@ -48,6 +49,15 @@ func TestHandleStartDeployerDisabled(t *testing.T) {
 	start0 := actions0["start"].(map[string]interface{})
 	if _, ok := start0["startTimestamp"]; !ok {
 		t.Error("expected startTimestamp in call[0]")
+	}
+
+	// Second call: sandboxAPIJobs.start failure record.
+	patch1 := (*calls)[1].Body["patch"].(map[string]interface{})
+	status1 := patch1["status"].(map[string]interface{})
+	jobs1 := status1["sandboxAPIJobs"].(map[string]interface{})
+	startJob1 := jobs1["start"].(map[string]interface{})
+	if startJob1["jobStatus"] != "error" {
+		t.Errorf("sandboxAPIJobs.start.jobStatus = %v, want error", startJob1["jobStatus"])
 	}
 
 	// FinishAction should have been called with "error".
@@ -83,10 +93,11 @@ func TestHandleStopDeployerDisabled(t *testing.T) {
 		t.Fatalf("handleStop returned error: %v", err)
 	}
 
-	// Should have 1 call: set startTimestamp only.
+	// Should have 2 calls: set startTimestamp, then record the sandbox stop
+	// failure (jobStatus=error, matching the Ansible rescue block).
 	// Sandbox error with deployer disabled -> FinishAction("error").
-	if len(*calls) != 1 {
-		t.Fatalf("expected 1 call, got %d", len(*calls))
+	if len(*calls) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(*calls))
 	}
 
 	// First call: set startTimestamp.
@@ -100,6 +111,15 @@ func TestHandleStopDeployerDisabled(t *testing.T) {
 	stop0 := actions0["stop"].(map[string]interface{})
 	if _, ok := stop0["startTimestamp"]; !ok {
 		t.Error("expected startTimestamp in call[0]")
+	}
+
+	// Second call: sandboxAPIJobs.stop failure record.
+	patch1 := (*calls)[1].Body["patch"].(map[string]interface{})
+	status1 := patch1["status"].(map[string]interface{})
+	jobs1 := status1["sandboxAPIJobs"].(map[string]interface{})
+	stopJob1 := jobs1["stop"].(map[string]interface{})
+	if stopJob1["jobStatus"] != "error" {
+		t.Errorf("sandboxAPIJobs.stop.jobStatus = %v, want error", stopJob1["jobStatus"])
 	}
 
 	// FinishAction should have been called with "error".
@@ -185,9 +205,11 @@ func TestHandleStopComplete(t *testing.T) {
 		t.Fatalf("handleStopComplete returned error: %v", err)
 	}
 
-	// Should have 2 calls: update tower jobs, then update state.
-	if len(*calls) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(*calls))
+	// Should have 3 calls: update tower jobs, record the sandbox stop
+	// failure (jobStatus=error, matching the Ansible rescue block; no uuid
+	// in this test), then update state.
+	if len(*calls) != 3 {
+		t.Fatalf("expected 3 calls, got %d", len(*calls))
 	}
 
 	// First call: update tower jobs and action status.
@@ -216,23 +238,32 @@ func TestHandleStopComplete(t *testing.T) {
 		t.Errorf("jobStatus = %v, want successful", stopJob0["jobStatus"])
 	}
 
-	// Second call: update state to stopped.
-	c1 := (*calls)[1]
-	if c1.Method != "PATCH" {
-		t.Errorf("call[1] method = %s, want PATCH", c1.Method)
-	}
-	patch1 := c1.Body["patch"].(map[string]interface{})
-
-	meta1 := patch1["metadata"].(map[string]interface{})
-	labels1 := meta1["labels"].(map[string]interface{})
-	if labels1["state"] != "stopped" {
-		t.Errorf("state label = %v, want stopped", labels1["state"])
+	// Second call: sandboxAPIJobs.stop failure record (no uuid configured).
+	patch1 := (*calls)[1].Body["patch"].(map[string]interface{})
+	status1 := patch1["status"].(map[string]interface{})
+	jobs1 := status1["sandboxAPIJobs"].(map[string]interface{})
+	stopJob1 := jobs1["stop"].(map[string]interface{})
+	if stopJob1["jobStatus"] != "error" {
+		t.Errorf("sandboxAPIJobs.stop.jobStatus = %v, want error", stopJob1["jobStatus"])
 	}
 
-	spec1 := patch1["spec"].(map[string]interface{})
-	vars1 := spec1["vars"].(map[string]interface{})
-	if vars1["current_state"] != "stopped" {
-		t.Errorf("current_state = %v, want stopped", vars1["current_state"])
+	// Third call: update state to stopped.
+	c2 := (*calls)[2]
+	if c2.Method != "PATCH" {
+		t.Errorf("call[2] method = %s, want PATCH", c2.Method)
+	}
+	patch2 := c2.Body["patch"].(map[string]interface{})
+
+	meta2 := patch2["metadata"].(map[string]interface{})
+	labels2 := meta2["labels"].(map[string]interface{})
+	if labels2["state"] != "stopped" {
+		t.Errorf("state label = %v, want stopped", labels2["state"])
+	}
+
+	spec2 := patch2["spec"].(map[string]interface{})
+	vars2 := spec2["vars"].(map[string]interface{})
+	if vars2["current_state"] != "stopped" {
+		t.Errorf("current_state = %v, want stopped", vars2["current_state"])
 	}
 
 	if rc.Result.FinishAction == nil {

@@ -184,6 +184,18 @@ func sandboxBook(ctx context.Context, rc *runner.RunContext, client *clients.San
 	if meta != nil && meta.Sandboxes != nil {
 		vars := template.J2VarContext(rc.SubjectAllVars(), rc.GovernorAllVars())
 		resolved := template.ResolveJ2(meta.Sandboxes, vars).([]interface{})
+
+		// Validate the request before sending it to the sandbox API,
+		// matching the Ansible sandbox_api_book.yaml
+		// validate_sandboxes_request task: on an invalid request the action
+		// finishes as failed without retrying (fail + anarchy_finish_action
+		// failed + end_play).
+		if msg := validateSandboxesRequest(resolved); msg != "OK" {
+			slog.Error("sandboxBook: invalid sandboxes request", "subject", rc.SubjectName(), "error", msg)
+			rc.FinishAction("failed")
+			return &SandboxResult{Status: "invalid-request"}, nil
+		}
+
 		reqBody["resources"] = injectVarAnnotations(resolved)
 	}
 
@@ -238,7 +250,7 @@ func sandboxCleanup(ctx context.Context, rc *runner.RunContext) error {
 	if uuid == "" {
 		return fmt.Errorf("sandbox cleanup: uuid is not defined or empty")
 	}
-	if guid := rc.GUID(); guid == "" {
+	if rc.GUID() == "" {
 		return fmt.Errorf("sandbox cleanup: guid is not defined or empty")
 	}
 
@@ -267,7 +279,9 @@ func sandboxCleanup(ctx context.Context, rc *runner.RunContext) error {
 func sandboxStart(ctx context.Context, rc *runner.RunContext) error {
 	uuid := rc.UUID()
 	if uuid == "" {
-		return fmt.Errorf("no uuid for sandbox start")
+		err := fmt.Errorf("no uuid for sandbox start")
+		recordSandboxActionFailure(ctx, rc, "start", 0, err)
+		return err
 	}
 
 	client, err := getSandboxClient(rc)
@@ -277,7 +291,9 @@ func sandboxStart(ctx context.Context, rc *runner.RunContext) error {
 
 	result, httpStatus, err := client.StartPlacement(ctx, uuid)
 	if err != nil {
-		return fmt.Errorf("start placement: %w", err)
+		err = fmt.Errorf("start placement: %w", err)
+		recordSandboxActionFailure(ctx, rc, "start", httpStatus, err)
+		return err
 	}
 
 	// Extract request_id and message for polling / status.
@@ -303,6 +319,7 @@ func sandboxStart(ctx context.Context, rc *runner.RunContext) error {
 			SkipUpdateProcessing: true,
 		},
 	}); err != nil {
+		recordSandboxActionFailure(ctx, rc, "start", httpStatus, err)
 		return err
 	}
 
@@ -321,7 +338,9 @@ func sandboxStart(ctx context.Context, rc *runner.RunContext) error {
 func sandboxStop(ctx context.Context, rc *runner.RunContext) error {
 	uuid := rc.UUID()
 	if uuid == "" {
-		return fmt.Errorf("no uuid for sandbox stop")
+		err := fmt.Errorf("no uuid for sandbox stop")
+		recordSandboxActionFailure(ctx, rc, "stop", 0, err)
+		return err
 	}
 
 	client, err := getSandboxClient(rc)
@@ -331,7 +350,9 @@ func sandboxStop(ctx context.Context, rc *runner.RunContext) error {
 
 	result, httpStatus, err := client.StopPlacement(ctx, uuid)
 	if err != nil {
-		return fmt.Errorf("stop placement: %w", err)
+		err = fmt.Errorf("stop placement: %w", err)
+		recordSandboxActionFailure(ctx, rc, "stop", httpStatus, err)
+		return err
 	}
 
 	// Extract request_id and message for polling / status.
@@ -357,6 +378,7 @@ func sandboxStop(ctx context.Context, rc *runner.RunContext) error {
 			SkipUpdateProcessing: true,
 		},
 	}); err != nil {
+		recordSandboxActionFailure(ctx, rc, "stop", httpStatus, err)
 		return err
 	}
 
@@ -421,6 +443,28 @@ func recordSandboxJobOutcome(ctx context.Context, rc *runner.RunContext, action 
 			SkipUpdateProcessing: true,
 		},
 	})
+}
+
+// recordSandboxActionFailure is the Go equivalent of the rescue block in the
+// Ansible sandbox_api_{start,stop}.yaml: when anything from the placement
+// action onward fails, it best-effort records jobStatus=error (with
+// httpStatus and message when available) in subject.status.sandboxAPIJobs.{action}
+// so the failure leaves a persisted trace before the caller propagates the
+// error. Recording failures are logged and swallowed — the original error is
+// the one that matters.
+func recordSandboxActionFailure(ctx context.Context, rc *runner.RunContext, action string, httpStatus int, err error) {
+	fields := map[string]interface{}{
+		"completeTimestamp": types.NowUTC(),
+		"jobStatus":         "error",
+		"message":           err.Error(),
+	}
+	if httpStatus > 0 {
+		fields["httpStatus"] = httpStatus
+	}
+	if rerr := recordSandboxJobOutcome(ctx, rc, action, fields); rerr != nil {
+		slog.Warn("recordSandboxActionFailure: unable to record failure status",
+			"action", action, "subject", rc.SubjectName(), "error", rerr)
+	}
 }
 
 // updateSubjectSandboxVars patches the subject with sandbox-extracted labels
@@ -502,6 +546,139 @@ func normalizeBoolToYesNo(sb map[string]interface{}, key string) {
 				sub[k] = "no"
 			}
 		}
+	}
+}
+
+// validateSandboxesRequest validates the resolved __meta__.sandboxes
+// resources before they are sent to the sandbox API, matching the Python
+// validate_sandboxes_request filter (babylon.py). It returns "OK" or an
+// error message:
+//   - at least one sandbox is required
+//   - each sandbox must have a kind
+//   - a sandbox with a var must not duplicate another sandbox's var
+//   - a second sandbox of the same kind without a var is rejected
+//   - annotations must be a dict of strings
+//   - cloud_selector / cloud_preference must be dicts of strings or booleans
+func validateSandboxesRequest(sandboxes []interface{}) string {
+	if len(sandboxes) == 0 {
+		return "ERROR: At least one sandbox is required in the sandboxes request"
+	}
+
+	mainFound := map[string]bool{}
+	targetVars := map[string]bool{}
+
+	for _, s := range sandboxes {
+		if msg := validateSandbox(s, mainFound, targetVars); msg != "" {
+			return msg
+		}
+	}
+	return "OK"
+}
+
+// validateSandbox validates a single sandbox request entry, updating the
+// main-found / target-var trackers. It returns an error message or "".
+func validateSandbox(s interface{}, mainFound, targetVars map[string]bool) string {
+	req, ok := s.(map[string]interface{})
+	if !ok {
+		return "ERROR: Sandbox request must be a dict"
+	}
+	if _, ok := req["kind"]; !ok {
+		return "ERROR: Sandbox kind is required in the sandboxes request"
+	}
+	kind := fmt.Sprint(req["kind"])
+
+	if msg := validateSandboxVar(req, kind, mainFound, targetVars); msg != "" {
+		return msg
+	}
+	if msg := validateSandboxAnnotations(req, kind); msg != "" {
+		return msg
+	}
+	for _, field := range []string{"cloud_selector", "cloud_preference"} {
+		if msg := validateSandboxCloudField(req, field, kind); msg != "" {
+			return msg
+		}
+	}
+	return ""
+}
+
+// validateSandboxVar checks the var handling of one sandbox against the
+// main-found / target-var trackers: a sandbox var must not duplicate another
+// sandbox's var, and a second sandbox of the same kind without a var is
+// rejected. It returns an error message or "".
+func validateSandboxVar(req map[string]interface{}, kind string, mainFound, targetVars map[string]bool) string {
+	// Python truthiness of req.get('var', False): missing, nil, false
+	// and the empty string are falsy; anything else is truthy.
+	if v, ok := req["var"]; ok && isTruthy(v) {
+		varName := fmt.Sprint(v)
+		if targetVars[varName] {
+			return "ERROR: Variable '" + varName + "' is duplicated"
+		}
+		targetVars[varName] = true
+		return ""
+	}
+	// A missing key reads as false (zero value), matching the Python
+	// main_found.get(kind, False) default.
+	if mainFound[kind] {
+		return "ERROR: missing 'var' key for second sandbox of kind " + kind
+	}
+	mainFound[kind] = true
+	return ""
+}
+
+// validateSandboxAnnotations checks that annotations, when present, are a
+// dict of strings. It returns an error message or "".
+func validateSandboxAnnotations(req map[string]interface{}, kind string) string {
+	ann, ok := req["annotations"]
+	if !ok {
+		return ""
+	}
+	annMap, ok := ann.(map[string]interface{})
+	if !ok {
+		return "ERROR: Annotations should be a dict for sandbox of kind " + kind
+	}
+	for _, v := range annMap {
+		if _, ok := v.(string); !ok {
+			return "ERROR: Annotations values should be strings for sandbox of kind " + kind
+		}
+	}
+	return ""
+}
+
+// validateSandboxCloudField checks that a cloud_selector / cloud_preference
+// field, when present, is a dict of strings or booleans (booleans are
+// normalized to "yes"/"no" by injectVarAnnotations). It returns an error
+// message or "".
+func validateSandboxCloudField(req map[string]interface{}, field, kind string) string {
+	raw, ok := req[field]
+	if !ok {
+		return ""
+	}
+	fieldMap, ok := raw.(map[string]interface{})
+	if !ok {
+		return "ERROR: " + field + " should be a dict for sandbox of kind " + kind
+	}
+	for _, v := range fieldMap {
+		switch v.(type) {
+		case string, bool:
+		default:
+			return "ERROR: " + field + " values should be strings for sandbox of kind " + kind
+		}
+	}
+	return ""
+}
+
+// isTruthy mirrors Python truthiness for the JSON/YAML value types that can
+// appear in a sandbox "var" field: nil, false and "" are falsy.
+func isTruthy(v interface{}) bool {
+	switch val := v.(type) {
+	case nil:
+		return false
+	case bool:
+		return val
+	case string:
+		return val != ""
+	default:
+		return true
 	}
 }
 

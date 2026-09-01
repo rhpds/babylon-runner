@@ -48,7 +48,12 @@ func callbackPayloadData(rc *runner.RunContext) (data, messageBody, messages int
 // For "complete" it forwards the callback payload (provision_data, messages)
 // into the completion handler; for the failure statuses it reuses the same
 // failure handlers used by the Tower polling path (checkDeployerJob), which
-// already mirror the Ansible error/failed/canceled handlers.
+// mirror the Ansible error/failed/canceled handlers. Two of those handlers
+// make sandbox API calls, matching their Ansible counterparts:
+// handleStopFailure calls sandboxStop (except for canceled, where the Ansible
+// stop-canceled handler deliberately does not include sandbox_api_stop.yaml),
+// and handleDestroyComplete calls sandboxCleanup. Neither launches Tower
+// jobs; both calls are idempotent and safe if a failed run is re-dispatched.
 func handleCallback(ctx context.Context, rc *runner.RunContext, action, status string) error {
 	slog.Info("handling action callback",
 		"action", action, "callback", status, "subject", rc.SubjectName())

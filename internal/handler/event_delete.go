@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/rhpds/babylon-runner/internal/runner"
@@ -95,10 +96,14 @@ func sandboxDestroyCatchAll(rc *runner.RunContext) bool {
 // handleEventDeleteWithoutDestroy marks the subject as destroyed and
 // finishes the action immediately.
 func handleEventDeleteWithoutDestroy(ctx context.Context, rc *runner.RunContext) error {
-	// Sandbox cleanup: release placement if catch_all is enabled.
+	// Sandbox cleanup: release placement if catch_all is enabled. A failure is
+	// propagated so the run finishes failed and Anarchy re-dispatches it,
+	// matching the Ansible handle-event-delete-without-destroy.yaml, where a
+	// fatal sandbox_cleanup.yml kills the play before the subject update and
+	// anarchy_subject_delete.
 	if rc.SandboxAPIInUse() && sandboxDestroyCatchAll(rc) && rc.UUID() != "" {
 		if err := sandboxCleanup(ctx, rc); err != nil {
-			slog.Error("handleEventDeleteWithoutDestroy: sandbox cleanup error", "error", err)
+			return fmt.Errorf("sandbox cleanup: %w", err)
 		}
 	}
 

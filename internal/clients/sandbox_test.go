@@ -196,6 +196,40 @@ func TestSandboxAPIStartPlacement(t *testing.T) {
 	}
 }
 
+func TestSandboxAPIStartPlacement202Accepted(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/login":
+			json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+		case "/api/v1/placements/uuid-123/start":
+			w.WriteHeader(http.StatusAccepted)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"request_id": "req-1",
+				"message":    "start request created",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewSandboxAPIClient(server.URL, "login-token", WithNoRetries())
+	defer client.Close(context.Background())
+
+	// The sandbox API replies 202 with a request_id for async lifecycle
+	// jobs; the client must accept it (Ansible status_code: [200, 202]).
+	result, status, err := client.StartPlacement(context.Background(), "uuid-123")
+	if err != nil {
+		t.Fatalf("StartPlacement returned error: %v", err)
+	}
+	if status != http.StatusAccepted {
+		t.Errorf("status = %d, want %d", status, http.StatusAccepted)
+	}
+	if result["request_id"] != "req-1" {
+		t.Errorf("request_id = %v, want %q", result["request_id"], "req-1")
+	}
+}
+
 func TestSandboxAPIStopPlacement(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

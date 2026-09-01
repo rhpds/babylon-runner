@@ -249,9 +249,12 @@ func (c *SandboxAPIClient) GetRequestStatus(ctx context.Context, requestID strin
 }
 
 // doPlacementAction performs a PUT request for placement start/stop
-// operations with retry and backoff. Transport errors and non-200
-// responses are retried; decode errors are terminal. The HTTP status of
-// the final response is returned so callers can record it in subject status.
+// operations with retry and backoff. Transport errors and responses other
+// than 200/202 are retried; decode errors are terminal. 200 and 202 are the
+// acceptable statuses, matching the Ansible sandbox_api_{start,stop}.yaml
+// `status_code: [200, 202]` (the sandbox API replies 202 with a request_id
+// for async lifecycle jobs). The HTTP status of the final response is
+// returned so callers can record it in subject status.
 func (c *SandboxAPIClient) doPlacementAction(ctx context.Context, actionURL string) (map[string]interface{}, int, error) {
 	headers, err := c.authHeaders(ctx)
 	if err != nil {
@@ -282,7 +285,7 @@ func (c *SandboxAPIClient) doPlacementAction(ctx context.Context, actionURL stri
 			lastErr = fmt.Errorf("PUT %s: %w", actionURL, err)
 			continue
 		}
-		if status != http.StatusOK {
+		if status != http.StatusOK && status != http.StatusAccepted {
 			lastErr = fmt.Errorf("PUT %s: status %d", actionURL, status)
 			continue
 		}
