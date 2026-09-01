@@ -632,7 +632,13 @@ func TestHandleDestroyWithCatchAll(t *testing.T) {
 	rc := newTestRunContext(t, server)
 
 	// Set state to destroy-error and enable sandbox API with catch-all.
+	// uuid and guid are set so the cleanup asserts pass; with no login
+	// token the release is skipped and the catch-all proceeds to deletion.
 	rc.Payload.Subject.Spec.Vars.CurrentState = "destroy-error"
+	rc.Payload.Subject.Spec.Vars.JobVars = map[string]interface{}{
+		"uuid": "test-uuid",
+		"guid": "test-guid",
+	}
 	rc.Payload.Governor.Spec.Vars.Meta = &types.Meta{
 		AWSSandboxed: true,
 		SandboxAPI: map[string]interface{}{
@@ -770,6 +776,125 @@ func TestHandleDestroyComplete(t *testing.T) {
 	}
 	if rc.Result.FinishAction == nil {
 		t.Error("expected FinishAction to be called")
+	}
+}
+
+// TestHandleDestroyCompleteSandboxCleanupFailure verifies that a failed
+// placement release on the destroy-complete success path propagates the
+// error (so the run is retried by Anarchy) instead of deleting the subject
+// and leaking the placement.
+func TestHandleDestroyCompleteSandboxCleanupFailure(t *testing.T) {
+	sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+		"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+		},
+		"/api/v1/placements/": func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodDelete {
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		},
+	})
+	defer sandboxServer.Close()
+
+	server, calls := newTestAnarchyServer(t)
+	defer server.Close()
+
+	rc := newTestRunContext(t, server)
+	withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+
+	err := handleDestroyComplete(context.Background(), rc)
+	if err == nil {
+		t.Fatal("expected error when sandbox cleanup fails, got nil")
+	}
+
+	// The subject must NOT be deleted and the action must NOT be finished:
+	// the error makes the run finish failed and Anarchy re-dispatches it.
+	if rc.Result.DeleteSubject != nil {
+		t.Error("expected DeleteSubject NOT to be set")
+	}
+	if rc.Result.FinishAction != nil {
+		t.Error("expected FinishAction NOT to be set")
+	}
+	// No subject PATCH should have happened either; the retry starts clean.
+	if len(*calls) != 0 {
+		t.Errorf("expected 0 anarchy calls, got %d", len(*calls))
+	}
+}
+
+// TestHandleDestroyCatchAllCleanupFailure verifies that a failed placement
+// release on the destroy catch-all path propagates the error (so Anarchy
+// re-dispatches the run) instead of deleting the subject and leaking the
+// placement, matching the Ansible catch-all where a fatal sandbox_cleanup.yml
+// kills the play before anarchy_subject_delete.
+func TestHandleDestroyCatchAllCleanupFailure(t *testing.T) {
+	sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+		"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+		},
+		"/api/v1/placements/": func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodDelete {
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		},
+	})
+	defer sandboxServer.Close()
+
+	server, calls := newTestAnarchyServer(t)
+	defer server.Close()
+
+	rc := newTestRunContext(t, server)
+	withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+	rc.Payload.Subject.Spec.Vars.CurrentState = "destroy-error"
+
+	err := handleDestroy(context.Background(), rc)
+	if err == nil {
+		t.Fatal("expected error when sandbox cleanup fails, got nil")
+	}
+	if rc.Result.DeleteSubject != nil {
+		t.Error("expected DeleteSubject NOT to be set")
+	}
+	if rc.Result.FinishAction != nil {
+		t.Error("expected FinishAction NOT to be set")
+	}
+	if len(*calls) != 0 {
+		t.Errorf("expected 0 anarchy calls, got %d", len(*calls))
+	}
+}
+
+// TestHandleEventDeleteWithoutDestroyCleanupFailure is the delete-without-destroy
+// counterpart: a failed placement release propagates instead of deleting the
+// subject, matching handle-event-delete-without-destroy.yaml.
+func TestHandleEventDeleteWithoutDestroyCleanupFailure(t *testing.T) {
+	sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+		"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+		},
+		"/api/v1/placements/": func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodDelete {
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		},
+	})
+	defer sandboxServer.Close()
+
+	server, calls := newTestAnarchyServer(t)
+	defer server.Close()
+
+	rc := newTestRunContext(t, server)
+	withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+
+	err := handleEventDeleteWithoutDestroy(context.Background(), rc)
+	if err == nil {
+		t.Fatal("expected error when sandbox cleanup fails, got nil")
+	}
+	if rc.Result.DeleteSubject != nil {
+		t.Error("expected DeleteSubject NOT to be set")
+	}
+	if rc.Result.FinishAction != nil {
+		t.Error("expected FinishAction NOT to be set")
+	}
+	if len(*calls) != 0 {
+		t.Errorf("expected 0 anarchy calls, got %d", len(*calls))
 	}
 }
 

@@ -11,6 +11,9 @@ import (
 	"github.com/rhpds/babylon-runner/internal/clients"
 	"github.com/rhpds/babylon-runner/internal/runner"
 	"github.com/rhpds/babylon-runner/internal/types"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 // newSimpleSandboxServer creates a mock Sandbox API server with common routes.
@@ -386,6 +389,148 @@ func TestSandboxGet(t *testing.T) {
 	})
 }
 
+// --- TestValidateSandboxesRequest ---
+
+// TestValidateSandboxesRequest mirrors the Python validate_sandboxes_request
+// filter test cases (babylon.py).
+func TestValidateSandboxesRequest(t *testing.T) {
+	tests := []struct {
+		name       string
+		sandboxes  []interface{}
+		wantResult string
+	}{
+		{
+			name:       "empty request - error",
+			sandboxes:  []interface{}{},
+			wantResult: "ERROR: At least one sandbox is required in the sandboxes request",
+		},
+		{
+			name: "single sandbox - OK",
+			sandboxes: []interface{}{
+				map[string]interface{}{"kind": "AwsSandbox"},
+			},
+			wantResult: "OK",
+		},
+		{
+			name: "missing kind - error",
+			sandboxes: []interface{}{
+				map[string]interface{}{"var": "a"},
+			},
+			wantResult: "ERROR: Sandbox kind is required in the sandboxes request",
+		},
+		{
+			name: "same kind with distinct vars - OK",
+			sandboxes: []interface{}{
+				map[string]interface{}{"kind": "OcpSandbox", "var": "main"},
+				map[string]interface{}{"kind": "OcpSandbox", "var": "second"},
+			},
+			wantResult: "OK",
+		},
+		{
+			name: "different kinds without vars - OK",
+			sandboxes: []interface{}{
+				map[string]interface{}{"kind": "AwsSandbox"},
+				map[string]interface{}{"kind": "OcpSandbox"},
+			},
+			wantResult: "OK",
+		},
+		{
+			name: "duplicated var - error",
+			sandboxes: []interface{}{
+				map[string]interface{}{"kind": "OcpSandbox", "var": "main"},
+				map[string]interface{}{"kind": "AwsSandbox", "var": "main"},
+			},
+			wantResult: "ERROR: Variable 'main' is duplicated",
+		},
+		{
+			name: "second sandbox of kind without var - error",
+			sandboxes: []interface{}{
+				map[string]interface{}{"kind": "AwsSandbox"},
+				map[string]interface{}{"kind": "AwsSandbox"},
+			},
+			wantResult: "ERROR: missing 'var' key for second sandbox of kind AwsSandbox",
+		},
+		{
+			name: "annotations of strings - OK",
+			sandboxes: []interface{}{
+				map[string]interface{}{
+					"kind":        "AwsSandbox",
+					"annotations": map[string]interface{}{"foo": "bar"},
+				},
+			},
+			wantResult: "OK",
+		},
+		{
+			name: "annotations not a dict - error",
+			sandboxes: []interface{}{
+				map[string]interface{}{
+					"kind":        "AwsSandbox",
+					"annotations": "not-a-dict",
+				},
+			},
+			wantResult: "ERROR: Annotations should be a dict for sandbox of kind AwsSandbox",
+		},
+		{
+			name: "annotations value not a string - error",
+			sandboxes: []interface{}{
+				map[string]interface{}{
+					"kind":        "AwsSandbox",
+					"annotations": map[string]interface{}{"foo": 42},
+				},
+			},
+			wantResult: "ERROR: Annotations values should be strings for sandbox of kind AwsSandbox",
+		},
+		{
+			name: "cloud_selector strings - OK",
+			sandboxes: []interface{}{
+				map[string]interface{}{
+					"kind":           "AwsSandbox",
+					"cloud_selector": map[string]interface{}{"version": "4.15"},
+				},
+			},
+			wantResult: "OK",
+		},
+		{
+			name: "cloud_selector booleans accepted - OK",
+			sandboxes: []interface{}{
+				map[string]interface{}{
+					"kind":           "AwsSandbox",
+					"cloud_selector": map[string]interface{}{"gpu": true},
+				},
+			},
+			wantResult: "OK",
+		},
+		{
+			name: "cloud_selector not a dict - error",
+			sandboxes: []interface{}{
+				map[string]interface{}{
+					"kind":           "AwsSandbox",
+					"cloud_selector": "not-a-dict",
+				},
+			},
+			wantResult: "ERROR: cloud_selector should be a dict for sandbox of kind AwsSandbox",
+		},
+		{
+			name: "cloud_preference value not string or bool - error",
+			sandboxes: []interface{}{
+				map[string]interface{}{
+					"kind":             "AwsSandbox",
+					"cloud_preference": map[string]interface{}{"version": 4.15},
+				},
+			},
+			wantResult: "ERROR: cloud_preference values should be strings for sandbox of kind AwsSandbox",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := validateSandboxesRequest(tt.sandboxes); got != tt.wantResult {
+				t.Errorf("validateSandboxesRequest() = %q, want %q", got, tt.wantResult)
+			}
+		})
+	}
+}
+
 // --- TestSandboxBook ---
 
 // newTestSandboxClient creates a SandboxAPIClient pointing at the given
@@ -452,6 +597,47 @@ func TestSandboxBook(t *testing.T) {
 		}
 	})
 
+	t.Run("comment includes ocp_console_url", func(t *testing.T) {
+		var gotBody map[string]interface{}
+		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+			"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+			},
+			"/api/v1/placements": func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&gotBody)
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"uuid":   "test-uuid-123",
+					"status": "available",
+					"resources": []interface{}{
+						map[string]interface{}{"name": "s1", "kind": "AwsSandbox"},
+					},
+				})
+			},
+		})
+		defer sandboxServer.Close()
+
+		anarchyServer, _ := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
+		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+		rc.Clientset = fake.NewSimpleClientset(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "console-public", Namespace: "openshift-config-managed"},
+			Data:       map[string]string{"consoleURL": "https://console.example.com"},
+		})
+
+		client := newTestSandboxClient(sandboxServer.URL)
+		if _, err := sandboxBook(context.Background(), rc, client); err != nil {
+			t.Fatalf("sandboxBook() error = %v", err)
+		}
+
+		ann := gotBody["annotations"].(map[string]interface{})
+		if ann["comment"] != "sandbox-api https://console.example.com" {
+			t.Errorf("comment = %v, want 'sandbox-api https://console.example.com'", ann["comment"])
+		}
+	})
+
 	t.Run("status 202 - queued", func(t *testing.T) {
 		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
 			"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
@@ -515,6 +701,53 @@ func TestSandboxBook(t *testing.T) {
 		}
 	})
 
+	t.Run("invalid sandboxes request - finishes action failed without booking", func(t *testing.T) {
+		var bookCalled bool
+		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+			"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+			},
+			"/api/v1/placements": func(w http.ResponseWriter, r *http.Request) {
+				bookCalled = true
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{})
+			},
+		})
+		defer sandboxServer.Close()
+
+		anarchyServer, _ := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
+		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+		rc.Payload.Governor.Spec.Vars.Meta = &types.Meta{
+			AWSSandboxed: true,
+			Sandboxes: []interface{}{
+				map[string]interface{}{"kind": "AwsSandbox"},
+				map[string]interface{}{"kind": "AwsSandbox"},
+			},
+		}
+
+		client := newTestSandboxClient(sandboxServer.URL)
+		result, err := sandboxBook(context.Background(), rc, client)
+		if err != nil {
+			t.Fatalf("sandboxBook() error = %v, want nil (failure is final, not retried)", err)
+		}
+
+		if result.Status != "invalid-request" {
+			t.Errorf("Status = %s, want 'invalid-request'", result.Status)
+		}
+		if bookCalled {
+			t.Error("expected no POST to /placements for an invalid request")
+		}
+		if rc.Result.FinishAction == nil {
+			t.Fatal("expected FinishAction to be set")
+		}
+		if rc.Result.FinishAction.State != "failed" {
+			t.Errorf("FinishAction state = %q, want 'failed'", rc.Result.FinishAction.State)
+		}
+	})
+
 	t.Run("other status - error", func(t *testing.T) {
 		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
 			"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
@@ -550,15 +783,30 @@ func TestSandboxBook(t *testing.T) {
 // --- TestSandboxCleanup ---
 
 func TestSandboxCleanup(t *testing.T) {
-	t.Run("no UUID - skips without error", func(t *testing.T) {
+	t.Run("no UUID - returns error", func(t *testing.T) {
 		anarchyServer, _ := newTestAnarchyServer(t)
 		defer anarchyServer.Close()
 
 		rc := newTestRunContext(t, anarchyServer)
 
 		err := sandboxCleanup(context.Background(), rc)
-		if err != nil {
-			t.Fatalf("sandboxCleanup() error = %v, want nil", err)
+		if err == nil {
+			t.Fatal("sandboxCleanup() error = nil, want error for missing uuid")
+		}
+	})
+
+	t.Run("no GUID - returns error", func(t *testing.T) {
+		anarchyServer, _ := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
+		rc.Payload.Subject.Spec.Vars.JobVars = map[string]interface{}{
+			"uuid": "test-uuid",
+		}
+
+		err := sandboxCleanup(context.Background(), rc)
+		if err == nil {
+			t.Fatal("sandboxCleanup() error = nil, want error for missing guid")
 		}
 	})
 
@@ -569,6 +817,7 @@ func TestSandboxCleanup(t *testing.T) {
 		rc := newTestRunContext(t, anarchyServer)
 		rc.Payload.Subject.Spec.Vars.JobVars = map[string]interface{}{
 			"uuid": "test-uuid",
+			"guid": "test-guid",
 		}
 
 		err := sandboxCleanup(context.Background(), rc)
@@ -633,6 +882,104 @@ func TestSandboxCleanup(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "release placement") {
 			t.Errorf("error = %v, want 'release placement' error", err)
+		}
+	})
+}
+
+func TestNormalizeBoolToYesNo(t *testing.T) {
+	input := map[string]interface{}{
+		"cloud_selector": map[string]interface{}{
+			"cost_optimized": true,
+			"region":         "us-east-1",
+			"spot":           false,
+		},
+		"cloud_preference": map[string]interface{}{
+			"balanced": true,
+		},
+		"unrelated": map[string]interface{}{
+			"flag": true,
+		},
+	}
+
+	normalizeBoolToYesNo(input, "cloud_selector")
+	normalizeBoolToYesNo(input, "cloud_preference")
+
+	cs := input["cloud_selector"].(map[string]interface{})
+	if cs["cost_optimized"] != "yes" {
+		t.Errorf("cost_optimized = %v, want 'yes'", cs["cost_optimized"])
+	}
+	if cs["spot"] != "no" {
+		t.Errorf("spot = %v, want 'no'", cs["spot"])
+	}
+	if cs["region"] != "us-east-1" {
+		t.Errorf("region = %v, want 'us-east-1' (unchanged)", cs["region"])
+	}
+
+	cp := input["cloud_preference"].(map[string]interface{})
+	if cp["balanced"] != "yes" {
+		t.Errorf("balanced = %v, want 'yes'", cp["balanced"])
+	}
+
+	// Unrelated map untouched.
+	un := input["unrelated"].(map[string]interface{})
+	if un["flag"] != true {
+		t.Errorf("unrelated.flag = %v, want true (unchanged)", un["flag"])
+	}
+}
+
+func TestInjectVarAnnotationsNormalizesCloudSelector(t *testing.T) {
+	input := []interface{}{
+		map[string]interface{}{
+			"kind": "AwsSandbox",
+			"var":  "sandbox2",
+			"cloud_selector": map[string]interface{}{
+				"cost_optimized": true,
+			},
+		},
+	}
+	out := injectVarAnnotations(input)
+
+	res := out[0].(map[string]interface{})
+	cs := res["cloud_selector"].(map[string]interface{})
+	if cs["cost_optimized"] != "yes" {
+		t.Errorf("cloud_selector.cost_optimized = %v, want 'yes'", cs["cost_optimized"])
+	}
+	if res["annotations"].(map[string]interface{})["var"] != "sandbox2" {
+		t.Errorf("annotations.var = %v, want 'sandbox2'", res["annotations"])
+	}
+}
+
+func TestOcpConsoleURL(t *testing.T) {
+	anarchyServer, _ := newTestAnarchyServer(t)
+	defer anarchyServer.Close()
+
+	t.Run("nil clientset - returns empty", func(t *testing.T) {
+		rc := newTestRunContext(t, anarchyServer)
+		rc.Clientset = nil
+		if got := ocpConsoleURL(context.Background(), rc); got != "" {
+			t.Errorf("ocpConsoleURL() = %q, want empty", got)
+		}
+	})
+
+	t.Run("with clientset but no configmap - returns empty", func(t *testing.T) {
+		rc := newTestRunContext(t, anarchyServer)
+		rc.Clientset = fake.NewSimpleClientset()
+		if got := ocpConsoleURL(context.Background(), rc); got != "" {
+			t.Errorf("ocpConsoleURL() = %q, want empty", got)
+		}
+	})
+
+	t.Run("with console-public configmap - returns consoleURL", func(t *testing.T) {
+		rc := newTestRunContext(t, anarchyServer)
+		rc.Clientset = fake.NewSimpleClientset(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "console-public",
+				Namespace: "openshift-config-managed",
+			},
+			Data: map[string]string{"consoleURL": "https://console.example.com"},
+		})
+		if got := ocpConsoleURL(context.Background(), rc); got != "https://console.example.com" {
+			t.Errorf("ocpConsoleURL() = %q, want console URL", got)
 		}
 	})
 }
@@ -800,10 +1147,113 @@ func TestSandboxStop(t *testing.T) {
 	})
 }
 
+// TestSandboxStopRecordsPrePollFailure verifies that a failed stop placement
+// request still records jobStatus=error (with httpStatus and message) in
+// subject.status.sandboxAPIJobs.stop, matching the Ansible
+// sandbox_api_stop.yaml rescue block.
+func TestSandboxStopRecordsPrePollFailure(t *testing.T) {
+	sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+		"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+		},
+		"/api/v1/placements/test-uuid-123/stop": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		},
+	})
+	defer sandboxServer.Close()
+
+	anarchyServer, calls := newTestAnarchyServer(t)
+	defer anarchyServer.Close()
+
+	rc := newTestRunContext(t, anarchyServer)
+	withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+
+	err := sandboxStop(context.Background(), rc)
+	if err == nil {
+		t.Fatal("expected error when stop placement fails, got nil")
+	}
+
+	var record map[string]interface{}
+	for _, c := range *calls {
+		if c.Method != http.MethodPatch {
+			continue
+		}
+		patch, _ := c.Body["patch"].(map[string]interface{})
+		status, _ := patch["status"].(map[string]interface{})
+		jobs, _ := status["sandboxAPIJobs"].(map[string]interface{})
+		if stop, _ := jobs["stop"].(map[string]interface{}); stop != nil {
+			record = stop
+		}
+	}
+	if record == nil {
+		t.Fatal("expected sandboxAPIJobs.stop failure record in subject status")
+	}
+	if record["jobStatus"] != "error" {
+		t.Errorf("jobStatus = %v, want error", record["jobStatus"])
+	}
+	if record["httpStatus"] != float64(http.StatusInternalServerError) {
+		t.Errorf("httpStatus = %v, want %d", record["httpStatus"], http.StatusInternalServerError)
+	}
+	if msg, _ := record["message"].(string); !strings.Contains(msg, "stop placement") {
+		t.Errorf("message = %q, want it to contain 'stop placement'", msg)
+	}
+}
+
+// TestSandboxStartRecordsPrePollFailure is the start counterpart of
+// TestSandboxStopRecordsPrePollFailure, matching the sandbox_api_start.yaml
+// rescue block.
+func TestSandboxStartRecordsPrePollFailure(t *testing.T) {
+	sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+		"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+		},
+		"/api/v1/placements/test-uuid-123/start": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		},
+	})
+	defer sandboxServer.Close()
+
+	anarchyServer, calls := newTestAnarchyServer(t)
+	defer anarchyServer.Close()
+
+	rc := newTestRunContext(t, anarchyServer)
+	withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+
+	err := sandboxStart(context.Background(), rc)
+	if err == nil {
+		t.Fatal("expected error when start placement fails, got nil")
+	}
+
+	var record map[string]interface{}
+	for _, c := range *calls {
+		if c.Method != http.MethodPatch {
+			continue
+		}
+		patch, _ := c.Body["patch"].(map[string]interface{})
+		status, _ := patch["status"].(map[string]interface{})
+		jobs, _ := status["sandboxAPIJobs"].(map[string]interface{})
+		if start, _ := jobs["start"].(map[string]interface{}); start != nil {
+			record = start
+		}
+	}
+	if record == nil {
+		t.Fatal("expected sandboxAPIJobs.start failure record in subject status")
+	}
+	if record["jobStatus"] != "error" {
+		t.Errorf("jobStatus = %v, want error", record["jobStatus"])
+	}
+	if record["httpStatus"] != float64(http.StatusInternalServerError) {
+		t.Errorf("httpStatus = %v, want %d", record["httpStatus"], http.StatusInternalServerError)
+	}
+	if msg, _ := record["message"].(string); !strings.Contains(msg, "start placement") {
+		t.Errorf("message = %q, want it to contain 'start placement'", msg)
+	}
+}
+
 // --- TestPollSandboxRequest ---
 
 func TestPollSandboxRequest(t *testing.T) {
-	t.Run("status success - returns nil", func(t *testing.T) {
+	t.Run("status success - returns nil and records jobStatus", func(t *testing.T) {
 		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
 			"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
@@ -816,14 +1266,21 @@ func TestPollSandboxRequest(t *testing.T) {
 		})
 		defer sandboxServer.Close()
 
+		anarchyServer, calls := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
 		client := newTestSandboxClient(sandboxServer.URL)
-		err := pollSandboxRequest(context.Background(), client, "req-1")
+		err := pollSandboxRequest(context.Background(), rc, client, "req-1", "start")
 		if err != nil {
 			t.Fatalf("pollSandboxRequest() error = %v", err)
 		}
+		if len(*calls) == 0 {
+			t.Fatal("expected a subject PATCH recording the outcome")
+		}
 	})
 
-	t.Run("status complete - returns nil", func(t *testing.T) {
+	t.Run("status complete - returns nil and records jobStatus", func(t *testing.T) {
 		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
 			"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
@@ -836,10 +1293,17 @@ func TestPollSandboxRequest(t *testing.T) {
 		})
 		defer sandboxServer.Close()
 
+		anarchyServer, calls := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
 		client := newTestSandboxClient(sandboxServer.URL)
-		err := pollSandboxRequest(context.Background(), client, "req-2")
+		err := pollSandboxRequest(context.Background(), rc, client, "req-2", "start")
 		if err != nil {
 			t.Fatalf("pollSandboxRequest() error = %v", err)
+		}
+		if len(*calls) == 0 {
+			t.Fatal("expected a subject PATCH recording the outcome")
 		}
 	})
 
@@ -857,8 +1321,12 @@ func TestPollSandboxRequest(t *testing.T) {
 		})
 		defer sandboxServer.Close()
 
+		anarchyServer, _ := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
 		client := newTestSandboxClient(sandboxServer.URL)
-		err := pollSandboxRequest(context.Background(), client, "req-3")
+		err := pollSandboxRequest(context.Background(), rc, client, "req-3", "start")
 		if err == nil {
 			t.Fatal("expected error for status 'error', got nil")
 		}
@@ -881,8 +1349,12 @@ func TestPollSandboxRequest(t *testing.T) {
 		})
 		defer sandboxServer.Close()
 
+		anarchyServer, _ := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
 		client := newTestSandboxClient(sandboxServer.URL)
-		err := pollSandboxRequest(context.Background(), client, "req-4")
+		err := pollSandboxRequest(context.Background(), rc, client, "req-4", "start")
 		if err == nil {
 			t.Fatal("expected error for status 'failed', got nil")
 		}

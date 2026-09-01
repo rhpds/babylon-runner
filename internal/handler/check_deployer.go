@@ -326,7 +326,16 @@ func buildStopFailureVars(rc *runner.RunContext, status, state string) map[strin
 // schedules start if "started".
 func handleStopFailure(ctx context.Context, rc *runner.RunContext, status string) error {
 	// Call sandbox API stop to save costs even if deployer failed.
-	if rc.SandboxAPIInUse() {
+	// Canceled is the exception, matching the Ansible governor: only
+	// handle-action-stop-{error,failed}.yaml include sandbox_api_stop.yaml;
+	// handle-action-stop-canceled.yaml deliberately does not. A canceled
+	// callback means the Tower job was deliberately aborted (an Anarchy
+	// action cancellation never fires callbacks at all), so the workload
+	// state is unknown-but-intentional: either retry the deployer stop
+	// (desired_state == stopped, after 1m) or pivot straight to start
+	// (desired_state == started). Forcing a sandbox API stop here would stop
+	// resources that are immediately about to be started again.
+	if status != "canceled" && rc.SandboxAPIInUse() {
 		if sandboxActionEnabled(rc, "stop") {
 			if err := sandboxStop(ctx, rc); err != nil {
 				slog.Error("handleStopFailure: sandbox stop error", "subject", rc.SubjectName(), "error", err)

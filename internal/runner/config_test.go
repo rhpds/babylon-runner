@@ -356,3 +356,28 @@ func TestConfigTowerPollIntervals(t *testing.T) {
 		}
 	})
 }
+
+func TestConfigSandboxQueueCheck(t *testing.T) {
+	setRequiredEnvs(t)
+
+	t.Run("default 30s", func(t *testing.T) {
+		cfg, err := ConfigFromEnv()
+		if err != nil {
+			t.Fatalf("ConfigFromEnv: %v", err)
+		}
+		if cfg.SandboxQueueCheck != "30s" {
+			t.Errorf("SandboxQueueCheck = %q, want 30s", cfg.SandboxQueueCheck)
+		}
+	})
+
+	t.Run("custom interval", func(t *testing.T) {
+		t.Setenv("SANDBOX_API_QUEUE_CHECK_INTERVAL", "1m")
+		cfg, err := ConfigFromEnv()
+		if err != nil {
+			t.Fatalf("ConfigFromEnv: %v", err)
+		}
+		if cfg.SandboxQueueCheck != "1m" {
+			t.Errorf("SandboxQueueCheck = %q, want 1m", cfg.SandboxQueueCheck)
+		}
+	})
+}

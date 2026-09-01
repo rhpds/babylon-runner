@@ -215,15 +215,15 @@ func (c *SandboxAPIClient) ReleasePlacement(ctx context.Context, uuid string) er
 }
 
 // StartPlacement starts a placement by UUID. It retries with backoff
-// on failure.
-func (c *SandboxAPIClient) StartPlacement(ctx context.Context, uuid string) (map[string]interface{}, error) {
+// on failure and returns the HTTP status code of the final response.
+func (c *SandboxAPIClient) StartPlacement(ctx context.Context, uuid string) (map[string]interface{}, int, error) {
 	url := fmt.Sprintf("%s/api/v1/placements/%s/start", c.baseURL, uuid)
 	return c.doPlacementAction(ctx, url)
 }
 
 // StopPlacement stops a placement by UUID. It retries with backoff
-// on failure.
-func (c *SandboxAPIClient) StopPlacement(ctx context.Context, uuid string) (map[string]interface{}, error) {
+// on failure and returns the HTTP status code of the final response.
+func (c *SandboxAPIClient) StopPlacement(ctx context.Context, uuid string) (map[string]interface{}, int, error) {
 	url := fmt.Sprintf("%s/api/v1/placements/%s/stop", c.baseURL, uuid)
 	return c.doPlacementAction(ctx, url)
 }
@@ -249,41 +249,47 @@ func (c *SandboxAPIClient) GetRequestStatus(ctx context.Context, requestID strin
 }
 
 // doPlacementAction performs a PUT request for placement start/stop
-// operations with retry and backoff. Transport errors and non-200
-// responses are retried; decode errors are terminal.
-func (c *SandboxAPIClient) doPlacementAction(ctx context.Context, actionURL string) (map[string]interface{}, error) {
+// operations with retry and backoff. Transport errors and responses other
+// than 200/202 are retried; decode errors are terminal. 200 and 202 are the
+// acceptable statuses, matching the Ansible sandbox_api_{start,stop}.yaml
+// `status_code: [200, 202]` (the sandbox API replies 202 with a request_id
+// for async lifecycle jobs). The HTTP status of the final response is
+// returned so callers can record it in subject status.
+func (c *SandboxAPIClient) doPlacementAction(ctx context.Context, actionURL string) (map[string]interface{}, int, error) {
 	headers, err := c.authHeaders(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	maxAttempts := len(c.retryDelays) + 1
 
 	var lastErr error
+	var lastStatus int
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return nil, lastStatus, ctx.Err()
 			case <-time.After(c.retryDelays[attempt-1]):
 			}
 		}
 
 		var result map[string]interface{}
 		status, err := httputil.DoJSON(ctx, c.client, http.MethodPut, actionURL, headers, nil, &result)
+		lastStatus = status
 		if err != nil {
 			if status >= 200 {
 				// Got a response but decode failed — terminal.
-				return nil, fmt.Errorf("decode response: %w", err)
+				return nil, status, fmt.Errorf("decode response: %w", err)
 			}
 			lastErr = fmt.Errorf("PUT %s: %w", actionURL, err)
 			continue
 		}
-		if status != http.StatusOK {
+		if status != http.StatusOK && status != http.StatusAccepted {
 			lastErr = fmt.Errorf("PUT %s: status %d", actionURL, status)
 			continue
 		}
-		return result, nil
+		return result, status, nil
 	}
-	return nil, fmt.Errorf("PUT %s failed after %d attempts: %w", actionURL, maxAttempts, lastErr)
+	return nil, lastStatus, fmt.Errorf("PUT %s failed after %d attempts: %w", actionURL, maxAttempts, lastErr)
 }
