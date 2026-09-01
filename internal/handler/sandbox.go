@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -123,6 +124,20 @@ func sandboxGet(ctx context.Context, rc *runner.RunContext, action string) (*San
 	}, nil
 }
 
+// resolveSandboxResources returns the sandbox resources to book, mirroring the
+// Ansible babylon_anarchy_governor `sandbox_api_resources` var: use
+// __meta__.sandboxes when defined, otherwise the default single AwsSandbox
+// (sandbox_api_resources_default in defaults/main.yaml). This keeps legacy
+// aws_sandboxed governors (no explicit sandboxes list) working.
+func resolveSandboxResources(meta *types.Meta) []interface{} {
+	if meta != nil && meta.Sandboxes != nil {
+		return meta.Sandboxes
+	}
+	return []interface{}{
+		map[string]interface{}{"kind": "AwsSandbox", "count": 1},
+	}
+}
+
 // sandboxBook books a new placement via the sandbox API.
 // The client is passed from the caller (sandboxGet) so the same
 // token cache is reused.
@@ -178,26 +193,26 @@ func sandboxBook(ctx context.Context, rc *runner.RunContext, client *clients.San
 	annotations["comment"] = "sandbox-api " + ocpConsoleURL(ctx, rc)
 	reqBody["annotations"] = annotations
 
-	// Add sandboxes/resources from __meta__ with var annotations injected.
-	// Resolve Jinja2 expressions (e.g. {{ job_vars.namespace_suffix | default('dev') }})
-	// before sending to the sandbox API.
-	if meta != nil && meta.Sandboxes != nil {
-		vars := template.J2VarContext(rc.SubjectAllVars(), rc.GovernorAllVars())
-		resolved := template.ResolveJ2(meta.Sandboxes, vars).([]interface{})
+	// Add sandboxes/resources with var annotations injected. Source is
+	// __meta__.sandboxes when defined, else the default AwsSandbox (parity with
+	// the Ansible sandbox_api_resources var). Resolve Jinja2 expressions
+	// (e.g. {{ job_vars.namespace_suffix | default('dev') }}) before sending to
+	// the sandbox API.
+	sandboxResources := resolveSandboxResources(meta)
+	vars := template.J2VarContext(rc.SubjectAllVars(), rc.GovernorAllVars())
+	resolved := template.ResolveJ2(sandboxResources, vars).([]interface{})
 
-		// Validate the request before sending it to the sandbox API,
-		// matching the Ansible sandbox_api_book.yaml
-		// validate_sandboxes_request task: on an invalid request the action
-		// finishes as failed without retrying (fail + anarchy_finish_action
-		// failed + end_play).
-		if msg := validateSandboxesRequest(resolved); msg != "OK" {
-			slog.Error("sandboxBook: invalid sandboxes request", "subject", rc.SubjectName(), "error", msg)
-			rc.FinishAction("failed")
-			return &SandboxResult{Status: "invalid-request"}, nil
-		}
-
-		reqBody["resources"] = injectVarAnnotations(resolved)
+	// Validate the request before sending it to the sandbox API, matching the
+	// Ansible sandbox_api_book.yaml validate_sandboxes_request task: on an
+	// invalid request the action finishes as failed without retrying (fail +
+	// anarchy_finish_action failed + end_play).
+	if msg := validateSandboxesRequest(resolved); msg != "OK" {
+		slog.Error("sandboxBook: invalid sandboxes request", "subject", rc.SubjectName(), "error", msg)
+		rc.FinishAction("failed")
+		return &SandboxResult{Status: "invalid-request"}, nil
 	}
+
+	reqBody["resources"] = injectVarAnnotations(resolved)
 
 	result, statusCode, err := client.BookPlacement(ctx, reqBody)
 	if err != nil {
@@ -218,8 +233,9 @@ func sandboxBook(ctx context.Context, rc *runner.RunContext, client *clients.San
 		// Queued or no capacity.
 		return &SandboxResult{Status: "queued", Placement: result}, nil
 	default:
+		body, _ := json.Marshal(result)
 		return &SandboxResult{Status: "error", Placement: result},
-			fmt.Errorf("book placement returned status %d", statusCode)
+			fmt.Errorf("book placement returned status %d: %s", statusCode, body)
 	}
 }
 

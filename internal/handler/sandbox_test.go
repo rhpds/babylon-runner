@@ -778,6 +778,122 @@ func TestSandboxBook(t *testing.T) {
 			t.Errorf("Status = %s, want 'error'", result.Status)
 		}
 	})
+
+	t.Run("no __meta__.sandboxes - sends default AwsSandbox resource", func(t *testing.T) {
+		var gotBody map[string]interface{}
+		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+			"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+			},
+			"/api/v1/placements": func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&gotBody)
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"uuid":   "test-uuid-123",
+					"status": "available",
+					"resources": []interface{}{
+						map[string]interface{}{"name": "s1", "kind": "AwsSandbox"},
+					},
+				})
+			},
+		})
+		defer sandboxServer.Close()
+
+		anarchyServer, _ := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
+		withSandboxEnabled(rc, sandboxServer, "test-uuid-123") // Meta.Sandboxes stays nil
+
+		client := newTestSandboxClient(sandboxServer.URL)
+		if _, err := sandboxBook(context.Background(), rc, client); err != nil {
+			t.Fatalf("sandboxBook() error = %v", err)
+		}
+
+		resources, ok := gotBody["resources"].([]interface{})
+		if !ok || len(resources) != 1 {
+			t.Fatalf("resources = %#v, want 1-element slice", gotBody["resources"])
+		}
+		res := resources[0].(map[string]interface{})
+		if res["kind"] != "AwsSandbox" {
+			t.Errorf("resources[0].kind = %v, want AwsSandbox", res["kind"])
+		}
+		// JSON numbers decode to float64.
+		if res["count"] != float64(1) {
+			t.Errorf("resources[0].count = %v (%T), want 1", res["count"], res["count"])
+		}
+	})
+
+	t.Run("explicit __meta__.sandboxes - default not applied", func(t *testing.T) {
+		var gotBody map[string]interface{}
+		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+			"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+			},
+			"/api/v1/placements": func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&gotBody)
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"uuid": "test-uuid-123", "status": "available",
+					"resources": []interface{}{map[string]interface{}{"name": "s1", "kind": "OcpSandbox"}},
+				})
+			},
+		})
+		defer sandboxServer.Close()
+
+		anarchyServer, _ := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
+		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+		rc.Payload.Governor.Spec.Vars.Meta.Sandboxes = []interface{}{
+			map[string]interface{}{"kind": "OcpSandbox", "namespace_suffix": "ocp4-cluster"},
+		}
+
+		client := newTestSandboxClient(sandboxServer.URL)
+		if _, err := sandboxBook(context.Background(), rc, client); err != nil {
+			t.Fatalf("sandboxBook() error = %v", err)
+		}
+
+		resources := gotBody["resources"].([]interface{})
+		if len(resources) != 1 {
+			t.Fatalf("resources len = %d, want 1", len(resources))
+		}
+		if resources[0].(map[string]interface{})["kind"] != "OcpSandbox" {
+			t.Errorf("resources[0].kind = %v, want OcpSandbox", resources[0].(map[string]interface{})["kind"])
+		}
+	})
+
+	t.Run("status 400 - error includes sandbox API body", func(t *testing.T) {
+		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+			"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+			},
+			"/api/v1/placements": func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"http_code": 400,
+					"message":   "Bad request: payload doesn't pass OpenAPI spec",
+				})
+			},
+		})
+		defer sandboxServer.Close()
+
+		anarchyServer, _ := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
+		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+
+		client := newTestSandboxClient(sandboxServer.URL)
+		_, err := sandboxBook(context.Background(), rc, client)
+		if err == nil {
+			t.Fatal("sandboxBook() error = nil, want error")
+		}
+		if !strings.Contains(err.Error(), "Bad request: payload doesn't pass OpenAPI spec") {
+			t.Errorf("error = %q, want it to contain the sandbox API body", err.Error())
+		}
+	})
 }
 
 // --- TestSandboxCleanup ---
