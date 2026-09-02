@@ -894,6 +894,36 @@ func TestSandboxBook(t *testing.T) {
 			t.Errorf("error = %q, want it to contain the sandbox API body", err.Error())
 		}
 	})
+
+	t.Run("status 400 empty body - error has no null suffix", func(t *testing.T) {
+		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+			"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+			},
+			"/api/v1/placements": func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusBadRequest) // no body
+			},
+		})
+		defer sandboxServer.Close()
+
+		anarchyServer, _ := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
+		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+
+		client := newTestSandboxClient(sandboxServer.URL)
+		_, err := sandboxBook(context.Background(), rc, client)
+		if err == nil {
+			t.Fatal("sandboxBook() error = nil, want error")
+		}
+		if strings.Contains(err.Error(), "null") {
+			t.Errorf("error = %q, want no 'null' suffix for an empty body", err.Error())
+		}
+		if !strings.Contains(err.Error(), "status 400") {
+			t.Errorf("error = %q, want it to contain the status code", err.Error())
+		}
+	})
 }
 
 // --- TestSandboxCleanup ---

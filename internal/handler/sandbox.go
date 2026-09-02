@@ -129,6 +129,12 @@ func sandboxGet(ctx context.Context, rc *runner.RunContext, action string) (*San
 // __meta__.sandboxes when defined, otherwise the default single AwsSandbox
 // (sandbox_api_resources_default in defaults/main.yaml). This keeps legacy
 // aws_sandboxed governors (no explicit sandboxes list) working.
+//
+// Note: []interface{} makes sandboxes: null indistinguishable from absent —
+// both unmarshal to a nil slice, so both fall through to the default. This
+// diverges from Ansible, where `sandboxes is defined` is true for an explicit
+// null; the divergence is intentional and is what legacy aws_sandboxed
+// governors (which carry sandboxes: null) rely on to book correctly.
 func resolveSandboxResources(meta *types.Meta) []interface{} {
 	if meta != nil && meta.Sandboxes != nil {
 		return meta.Sandboxes
@@ -233,9 +239,13 @@ func sandboxBook(ctx context.Context, rc *runner.RunContext, client *clients.San
 		// Queued or no capacity.
 		return &SandboxResult{Status: "queued", Placement: result}, nil
 	default:
-		body, _ := json.Marshal(result)
+		if len(result) > 0 {
+			body, _ := json.Marshal(result)
+			return &SandboxResult{Status: "error", Placement: result},
+				fmt.Errorf("book placement returned status %d: %s", statusCode, body)
+		}
 		return &SandboxResult{Status: "error", Placement: result},
-			fmt.Errorf("book placement returned status %d: %s", statusCode, body)
+			fmt.Errorf("book placement returned status %d", statusCode)
 	}
 }
 
