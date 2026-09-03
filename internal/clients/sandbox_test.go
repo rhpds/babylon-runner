@@ -298,6 +298,47 @@ func TestSandboxAPIReleasePlacement(t *testing.T) {
 	}
 }
 
+// TestSandboxAPIReleasePlacementAcceptedStatuses verifies that ReleasePlacement
+// treats 202 (placement marked for deletion) and 404 (placement already gone)
+// as success, matching the Ansible sandbox_api_release.yaml status_code:
+// [200, 202, 404]. The sandbox API's DeletePlacementHandler never returns 200 —
+// it returns 202 on the normal async-delete path and 404 when the placement no
+// longer exists (idempotent cleanup). Treating either as an error caused an
+// infinite delete/destroy retry loop.
+func TestSandboxAPIReleasePlacementAcceptedStatuses(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+	}{
+		{"202 marked for deletion", http.StatusAccepted},
+		{"404 already gone", http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/v1/login":
+					json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+				case "/api/v1/placements/uuid-123":
+					if r.Method != http.MethodDelete {
+						t.Errorf("method = %s, want DELETE", r.Method)
+					}
+					w.WriteHeader(tc.status)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			client := NewSandboxAPIClient(server.URL, "login-token", WithNoRetries())
+			defer client.Close(context.Background())
+
+			if err := client.ReleasePlacement(context.Background(), "uuid-123"); err != nil {
+				t.Fatalf("ReleasePlacement(status %d) returned error: %v", tc.status, err)
+			}
+		})
+	}
+}
+
 func TestSandboxAPIGetRequestStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
