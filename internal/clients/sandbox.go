@@ -208,10 +208,17 @@ func (c *SandboxAPIClient) ReleasePlacement(ctx context.Context, uuid string) er
 	if err != nil {
 		return fmt.Errorf("DELETE %s: %w", url, err)
 	}
-	if status != http.StatusOK {
+	// Accept 200, 202 and 404 as success
+	// sandbox_api_release.yaml status_code: [200, 202, 404]. The sandbox API's
+	// DeletePlacementHandler returns 202 on the normal async-delete path and 404
+	// when the placement no longer exists — a 404 means cleanup is already done,
+	// so releasing is idempotent. Any other status is a real error.
+	switch status {
+	case http.StatusOK, http.StatusAccepted, http.StatusNotFound:
+		return nil
+	default:
 		return fmt.Errorf("DELETE %s: status %d", url, status)
 	}
-	return nil
 }
 
 // StartPlacement starts a placement by UUID. It retries with backoff
