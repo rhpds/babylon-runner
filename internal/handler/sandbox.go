@@ -83,7 +83,7 @@ func sandboxGet(ctx context.Context, rc *runner.RunContext, action string) (*San
 		return nil, err
 	}
 
-	placement, statusCode, err := client.GetPlacement(ctx, uuid)
+	placementMap, statusCode, err := client.GetPlacement(ctx, uuid)
 	if err != nil {
 		return nil, fmt.Errorf("get placement: %w", err)
 	}
@@ -96,20 +96,28 @@ func sandboxGet(ctx context.Context, rc *runner.RunContext, action string) (*San
 		return &SandboxResult{Status: "not-found"}, nil
 	}
 
-	// Check placement status.
-	placementStatus, _ := placement["status"].(string)
-	if placementStatus == "error" {
-		return &SandboxResult{Status: "error", Placement: placement}, nil
+	// Aligned with sandbox-api contract: use typed struct for safety.
+	var placement clients.SandboxPlacement
+	if resBytes, err := json.Marshal(placementMap); err == nil {
+		_ = json.Unmarshal(resBytes, &placement)
 	}
-	if placementStatus == "queued" {
-		return &SandboxResult{Status: "queued", Placement: placement}, nil
+
+	// Check placement status using typed struct.
+	switch placement.Status {
+	case "success", "complete":
+		// Fall through to extraction
+	case "error":
+		return &SandboxResult{Status: "error", Placement: placementMap}, nil
+	default:
+		// Any other status (queued, initializing, new, updating) means we are not ready.
+		return &SandboxResult{Status: "queued", Placement: placementMap}, nil
 	}
 
 	// Extract vars (without creds for subject) and labels.
-	subjectVars := extractSandboxVars(placement, false)
-	labels := extractSandboxLabels(placement)
+	subjectVars := extractSandboxVars(placementMap, false)
+	labels := extractSandboxLabels(placementMap)
 	// Extract vars with creds for Tower extra_vars.
-	dynamicVars := extractSandboxVars(placement, true)
+	dynamicVars := extractSandboxVars(placementMap, true)
 
 	if err := updateSubjectSandboxVars(ctx, rc, subjectVars, labels); err != nil {
 		return nil, fmt.Errorf("update subject with sandbox vars: %w", err)
@@ -117,7 +125,7 @@ func sandboxGet(ctx context.Context, rc *runner.RunContext, action string) (*San
 
 	return &SandboxResult{
 		Status:      "success",
-		Placement:   placement,
+		Placement:   placementMap,
 		DynamicVars: dynamicVars,
 		SubjectVars: subjectVars,
 		Labels:      labels,
@@ -225,19 +233,63 @@ func sandboxBook(ctx context.Context, rc *runner.RunContext, client *clients.San
 		return nil, fmt.Errorf("book placement: %w", err)
 	}
 
+	// Aligned with sandbox-api contract: placement may be under "Placement" key.
+	// Use JSON marshaling for safe conversion from map[string]interface{} to types.
+	// This handles both wrapped and unwrapped formats.
+	var response clients.SandboxPlacementResponse
+	var pMap map[string]interface{}
+	if result["Placement"] != nil {
+		if resBytes, err := json.Marshal(result); err == nil {
+			_ = json.Unmarshal(resBytes, &response)
+		}
+		pMap, _ = result["Placement"].(map[string]interface{})
+	} else {
+		// Fallback: try to unmarshal root as a placement
+		if resBytes, err := json.Marshal(result); err == nil {
+			_ = json.Unmarshal(resBytes, &response.Placement)
+		}
+		pMap = result
+	}
+	placement := response.Placement
+
 	switch statusCode {
 	case http.StatusOK:
-		dynamicVars := extractSandboxVars(result, true)
-		labels := extractSandboxLabels(result)
+		// HTTP 200 is the idempotent success path.
+		dynamicVars := extractSandboxVars(pMap, true)
+		labels := extractSandboxLabels(pMap)
 		return &SandboxResult{
 			Status:      "success",
-			Placement:   result,
+			Placement:   pMap,
 			DynamicVars: dynamicVars,
 			Labels:      labels,
 		}, nil
-	case 202, 507:
-		// Queued or no capacity.
-		return &SandboxResult{Status: "queued", Placement: result}, nil
+
+	case http.StatusAccepted:
+		// HTTP 202 is the asynchronous/rate-limited path.
+		switch placement.Status {
+		case "success", "complete":
+			dynamicVars := extractSandboxVars(pMap, true)
+			labels := extractSandboxLabels(pMap)
+			return &SandboxResult{
+				Status:      "success",
+				Placement:   pMap,
+				DynamicVars: dynamicVars,
+				Labels:      labels,
+			}, nil
+
+		case "queued":
+			return &SandboxResult{Status: "queued", Placement: pMap}, nil
+
+		default:
+			// For any other status (like error or initializing), perform a follow-up 
+			// GET to propagate the result, matching Ansible's behavior.
+			return sandboxGet(ctx, rc, "provision")
+		}
+
+	case 507:
+		// Insufficient Storage (No Capacity) is a terminal failure.
+		return &SandboxResult{Status: "error", Placement: result}, fmt.Errorf("sandbox API: no capacity available (507)")
+
 	default:
 		if len(result) > 0 {
 			body, _ := json.Marshal(result)

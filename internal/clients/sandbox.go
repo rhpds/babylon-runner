@@ -68,6 +68,22 @@ func NewSandboxAPIClient(baseURL, loginToken string, opts ...SandboxAPIOption) *
 	return c
 }
 
+// SandboxPlacement represents a placement object from the Sandbox API.
+type SandboxPlacement struct {
+	ServiceUuid string                   `json:"service_uuid"`
+	Status      string                   `json:"status"`
+	Annotations map[string]string        `json:"annotations"`
+	Resources   []map[string]interface{} `json:"resources,omitempty"`
+}
+
+// SandboxPlacementResponse represents a wrapped placement response from the
+// Sandbox API (typically from the POST /placements endpoint).
+type SandboxPlacementResponse struct {
+	HTTPStatusCode int              `json:"http_code,omitempty"`
+	Message        string           `json:"message"`
+	Placement      SandboxPlacement `json:"Placement"`
+}
+
 // Close releases resources held by the client, including the cached
 // access token.
 func (c *SandboxAPIClient) Close(ctx context.Context) error {
