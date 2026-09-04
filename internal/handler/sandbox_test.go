@@ -197,7 +197,7 @@ func TestSandboxGet(t *testing.T) {
 			"/api/v1/placements/": func(w http.ResponseWriter, r *http.Request) {
 				placement := map[string]interface{}{
 					"uuid":   "test-uuid-123",
-					"status": "available",
+					"status": "success",
 					"resources": []interface{}{
 						map[string]interface{}{
 							"name": "sandbox-aws-1",
@@ -269,7 +269,7 @@ func TestSandboxGet(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"uuid":      "test-uuid-123",
-					"status":    "available",
+					"status":    "success",
 					"resources": []interface{}{},
 				})
 			default:
@@ -385,6 +385,36 @@ func TestSandboxGet(t *testing.T) {
 
 		if result.Status != "queued" {
 			t.Errorf("Status = %s, want 'queued'", result.Status)
+		}
+	})
+
+	t.Run("sandboxGet status=initializing - returns queued", func(t *testing.T) {
+		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+			"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+			},
+			"/api/v1/placements/": func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"uuid":   "test-uuid-123",
+					"status": "initializing",
+				})
+			},
+		})
+		defer sandboxServer.Close()
+
+		anarchyServer, _ := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
+		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+
+		result, err := sandboxGet(context.Background(), rc, "provision")
+		if err != nil {
+			t.Fatalf("sandboxGet() error = %v", err)
+		}
+
+		if result.Status != "queued" {
+			t.Errorf("Status = %s, want 'queued' for initializing status", result.Status)
 		}
 	})
 }
@@ -549,7 +579,7 @@ func TestSandboxBook(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"uuid":   "test-uuid-123",
-					"status": "available",
+					"status": "success",
 					"resources": []interface{}{
 						map[string]interface{}{
 							"name": "sandbox-1",
@@ -608,7 +638,7 @@ func TestSandboxBook(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"uuid":   "test-uuid-123",
-					"status": "available",
+					"status": "success",
 					"resources": []interface{}{
 						map[string]interface{}{"name": "s1", "kind": "AwsSandbox"},
 					},
@@ -648,37 +678,6 @@ func TestSandboxBook(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"uuid":   "test-uuid-123",
 					"status": "queued",
-				})
-			},
-		})
-		defer sandboxServer.Close()
-
-		anarchyServer, _ := newTestAnarchyServer(t)
-		defer anarchyServer.Close()
-
-		rc := newTestRunContext(t, anarchyServer)
-		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
-
-		client := newTestSandboxClient(sandboxServer.URL)
-		result, err := sandboxBook(context.Background(), rc, client)
-		if err != nil {
-			t.Fatalf("sandboxBook() error = %v", err)
-		}
-
-		if result.Status != "queued" {
-			t.Errorf("Status = %s, want 'queued'", result.Status)
-		}
-	})
-
-	t.Run("status 507 - queued (no capacity)", func(t *testing.T) {
-		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
-			"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
-				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
-			},
-			"/api/v1/placements": func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(507)
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"message": "No capacity",
 				})
 			},
 		})
@@ -779,6 +778,292 @@ func TestSandboxBook(t *testing.T) {
 		}
 	})
 
+	t.Run("status 507 - error (no capacity)", func(t *testing.T) {
+		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+			"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+			},
+			"/api/v1/placements": func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(507)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"message": "No capacity",
+				})
+			},
+		})
+		defer sandboxServer.Close()
+
+		anarchyServer, _ := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
+		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+
+		client := newTestSandboxClient(sandboxServer.URL)
+		result, err := sandboxBook(context.Background(), rc, client)
+		if err == nil {
+			t.Fatal("expected error for status 507, got nil")
+		}
+
+		if result.Status != "error" {
+			t.Errorf("Status = %s, want 'error'", result.Status)
+		}
+	})
+
+	t.Run("status 202 - success (immediate completion)", func(t *testing.T) {
+		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+			"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+			},
+			"/api/v1/placements": func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusAccepted)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"uuid":   "test-uuid-123",
+					"status": "success",
+					"resources": []interface{}{
+						map[string]interface{}{"name": "s1", "kind": "AwsSandbox"},
+					},
+				})
+			},
+		})
+		defer sandboxServer.Close()
+
+		anarchyServer, _ := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
+		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+
+		client := newTestSandboxClient(sandboxServer.URL)
+		result, err := sandboxBook(context.Background(), rc, client)
+		if err != nil {
+			t.Fatalf("sandboxBook() error = %v", err)
+		}
+
+		if result.Status != "success" {
+			t.Errorf("Status = %s, want 'success' (current code returns 'queued')", result.Status)
+		}
+	})
+
+	t.Run("status 202 - error (via follow-up GET)", func(t *testing.T) {
+		var postCalled, getCalled bool
+		sandboxServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v1/login":
+				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+			case r.Method == http.MethodPost && r.URL.Path == "/api/v1/placements":
+				postCalled = true
+				w.WriteHeader(http.StatusAccepted)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"uuid":   "test-uuid-123",
+					"status": "initializing",
+				})
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v1/placements/test-uuid-123":
+				getCalled = true
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"uuid":   "test-uuid-123",
+					"status": "error",
+				})
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer sandboxServer.Close()
+
+		anarchyServer, _ := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
+		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+
+		client := newTestSandboxClient(sandboxServer.URL)
+		result, err := sandboxBook(context.Background(), rc, client)
+		if err != nil {
+			t.Fatalf("sandboxBook() error = %v", err)
+		}
+
+		if !postCalled {
+			t.Error("expected POST /placements to be called")
+		}
+		if !getCalled {
+			t.Error("expected follow-up GET /placements to be called for initializing status")
+		}
+		if result.Status != "error" {
+			t.Errorf("Status = %s, want 'error'", result.Status)
+		}
+	})
+
+	t.Run("status 202 - error (immediate in POST)", func(t *testing.T) {
+		var postCalled, getCalled bool
+		sandboxServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v1/login":
+				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+			case r.Method == http.MethodPost && r.URL.Path == "/api/v1/placements":
+				postCalled = true
+				w.WriteHeader(http.StatusAccepted)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"uuid":   "test-uuid-123",
+					"status": "error",
+				})
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v1/placements/test-uuid-123":
+				getCalled = true
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"uuid":   "test-uuid-123",
+					"status": "error",
+				})
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer sandboxServer.Close()
+
+		anarchyServer, _ := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
+		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+
+		client := newTestSandboxClient(sandboxServer.URL)
+		result, err := sandboxBook(context.Background(), rc, client)
+		if err != nil {
+			t.Fatalf("sandboxBook() error = %v", err)
+		}
+
+		if !postCalled {
+			t.Error("expected POST /placements to be called")
+		}
+		if !getCalled {
+			t.Error("expected follow-up GET for status: error")
+		}
+		if result.Status != "error" {
+			t.Errorf("Status = %s, want 'error'", result.Status)
+		}
+	})
+
+	t.Run("status 202 - queued (no follow-up)", func(t *testing.T) {
+		var postCalled, getCalled bool
+		sandboxServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v1/login":
+				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+			case r.Method == http.MethodPost && r.URL.Path == "/api/v1/placements":
+				postCalled = true
+				w.WriteHeader(http.StatusAccepted)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"uuid":   "test-uuid-123",
+					"status": "queued",
+				})
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v1/placements/test-uuid-123":
+				getCalled = true
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"uuid":   "test-uuid-123",
+					"status": "success",
+				})
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer sandboxServer.Close()
+
+		anarchyServer, _ := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
+		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+
+		client := newTestSandboxClient(sandboxServer.URL)
+		result, err := sandboxBook(context.Background(), rc, client)
+		if err != nil {
+			t.Fatalf("sandboxBook() error = %v", err)
+		}
+
+		if !postCalled {
+			t.Error("expected POST /placements to be called")
+		}
+		if getCalled {
+			t.Error("expected NO follow-up GET for queued status")
+		}
+		if result.Status != "queued" {
+			t.Errorf("Status = %s, want 'queued'", result.Status)
+		}
+	})
+
+	t.Run("status 200 - success with error status in body (idempotent)", func(t *testing.T) {
+		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+			"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+			},
+			"/api/v1/placements": func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"uuid":   "test-uuid-123",
+					"status": "error",
+					"resources": []interface{}{
+						map[string]interface{}{"name": "s1", "kind": "AwsSandbox"},
+					},
+				})
+			},
+		})
+		defer sandboxServer.Close()
+
+		anarchyServer, _ := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
+		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+
+		client := newTestSandboxClient(sandboxServer.URL)
+		result, err := sandboxBook(context.Background(), rc, client)
+		if err != nil {
+			t.Fatalf("sandboxBook() error = %v", err)
+		}
+
+		if result.Status != "success" {
+			t.Errorf("Status = %s, want 'success' for HTTP 200 (idempotent path)", result.Status)
+		}
+	})
+
+	t.Run("status 200 - success (wrapped Placement)", func(t *testing.T) {
+		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
+			"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
+			},
+			"/api/v1/placements": func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(clients.SandboxPlacementResponse{
+					Message: "Placement Created",
+					Placement: clients.SandboxPlacement{
+						ServiceUuid: "test-uuid-123",
+						Status:      "success",
+						Resources: []map[string]interface{}{
+							{"name": "s1", "kind": "AwsSandbox"},
+						},
+					},
+				})
+			},
+		})
+		defer sandboxServer.Close()
+
+		anarchyServer, _ := newTestAnarchyServer(t)
+		defer anarchyServer.Close()
+
+		rc := newTestRunContext(t, anarchyServer)
+		withSandboxEnabled(rc, sandboxServer, "test-uuid-123")
+
+		client := newTestSandboxClient(sandboxServer.URL)
+		result, err := sandboxBook(context.Background(), rc, client)
+		if err != nil {
+			t.Fatalf("sandboxBook() error = %v", err)
+		}
+
+		if result.Status != "success" {
+			t.Errorf("Status = %s, want 'success' (current code only handles unwrapped)", result.Status)
+		}
+		if result.Labels["sandbox"] != "s1" {
+			t.Errorf("Label sandbox = %v, want 's1'", result.Labels["sandbox"])
+		}
+	})
+
 	t.Run("no __meta__.sandboxes - sends default AwsSandbox resource", func(t *testing.T) {
 		var gotBody map[string]interface{}
 		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
@@ -790,7 +1075,7 @@ func TestSandboxBook(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"uuid":   "test-uuid-123",
-					"status": "available",
+					"status": "success",
 					"resources": []interface{}{
 						map[string]interface{}{"name": "s1", "kind": "AwsSandbox"},
 					},
@@ -834,7 +1119,7 @@ func TestSandboxBook(t *testing.T) {
 				_ = json.NewDecoder(r.Body).Decode(&gotBody)
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(map[string]interface{}{
-					"uuid": "test-uuid-123", "status": "available",
+					"uuid": "test-uuid-123", "status": "success",
 					"resources": []interface{}{map[string]interface{}{"name": "s1", "kind": "OcpSandbox"}},
 				})
 			},
