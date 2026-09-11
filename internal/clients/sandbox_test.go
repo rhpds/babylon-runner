@@ -532,6 +532,78 @@ func TestSandboxAPIBookPlacementUnexpectedStatus(t *testing.T) {
 	}
 }
 
+func TestSandboxAPIStartPlacement404FastFails(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/login" && r.Method == "GET":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"access_token": "test-token"})
+		case r.URL.Path == "/api/v1/placements/missing-uuid/start" && r.Method == "PUT":
+			attempts++
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := NewSandboxAPIClient(server.URL, "login-token",
+		func(c *SandboxAPIClient) {
+			c.retryDelays = []time.Duration{1 * time.Millisecond, 1 * time.Millisecond, 1 * time.Millisecond}
+			c.loginRetryDelays = nil
+		},
+	)
+	defer client.Close(context.Background())
+
+	_, status, err := client.StartPlacement(context.Background(), "missing-uuid")
+	if err == nil {
+		t.Fatal("expected error for 404, got nil")
+	}
+	if status != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", status, http.StatusNotFound)
+	}
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1 (404 must not retry)", attempts)
+	}
+}
+
+func TestSandboxAPIStopPlacement404FastFails(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/login" && r.Method == "GET":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"access_token": "test-token"})
+		case r.URL.Path == "/api/v1/placements/missing-uuid/stop" && r.Method == "PUT":
+			attempts++
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := NewSandboxAPIClient(server.URL, "login-token",
+		func(c *SandboxAPIClient) {
+			c.retryDelays = []time.Duration{1 * time.Millisecond, 1 * time.Millisecond, 1 * time.Millisecond}
+			c.loginRetryDelays = nil
+		},
+	)
+	defer client.Close(context.Background())
+
+	_, status, err := client.StopPlacement(context.Background(), "missing-uuid")
+	if err == nil {
+		t.Fatal("expected error for 404, got nil")
+	}
+	if status != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", status, http.StatusNotFound)
+	}
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1 (404 must not retry)", attempts)
+	}
+}
+
 func TestSandboxAPITokenCaching(t *testing.T) {
 	var loginCount int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
