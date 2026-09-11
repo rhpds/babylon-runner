@@ -290,6 +290,21 @@ func TestTowerCancelJobAlreadyFinished(t *testing.T) {
 	}
 }
 
+func TestTowerCancelJobNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 404 means the job no longer exists — nothing to cancel.
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	tc := NewTowerClient("unused", "user", "pass", nil)
+	tc.baseURL = server.URL
+
+	if err := tc.CancelJob(context.Background(), "token", 99); err != nil {
+		t.Fatalf("CancelJob should not error on 404, got: %v", err)
+	}
+}
+
 func TestTowerLaunchJob(t *testing.T) {
 	// Track which endpoints were called and return appropriate responses.
 	// EnsureResource does GET (search) then POST (create) for each resource.

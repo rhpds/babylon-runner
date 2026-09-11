@@ -331,8 +331,9 @@ func (tc *TowerClient) CancelJob(ctx context.Context, oauthToken string, jobID i
 	}
 	defer resp.Body.Close()
 
-	// 405 means the job already finished — nothing to cancel, which is fine.
-	if resp.StatusCode == http.StatusMethodNotAllowed {
+	// 405 means the job already finished; 404 means it no longer exists.
+	// In both cases there is nothing to cancel, which is fine.
+	if resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusNotFound {
 		return nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
