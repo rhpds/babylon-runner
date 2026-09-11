@@ -73,6 +73,12 @@ func sandboxLoginToken(rc *runner.RunContext) string {
 //  4. If found with resources -> extract vars, update subject
 //  5. If action is "provision" and not found -> book new placement
 func sandboxGet(ctx context.Context, rc *runner.RunContext, action string) (*SandboxResult, error) {
+	return _sandboxGet(ctx, rc, action, true)
+}
+
+// _sandboxGet is the internal implementation of sandboxGet with a flag to 
+// prevent infinite recursion during follow-up checks.
+func _sandboxGet(ctx context.Context, rc *runner.RunContext, action string, allowBook bool) (*SandboxResult, error) {
 	uuid := rc.UUID()
 	if uuid == "" {
 		return nil, fmt.Errorf("no uuid in job_vars")
@@ -90,7 +96,7 @@ func sandboxGet(ctx context.Context, rc *runner.RunContext, action string) (*San
 
 	// Not found -- book if provision action.
 	if statusCode == http.StatusNotFound {
-		if action == "provision" && sandboxLoginToken(rc) != "" {
+		if allowBook && action == "provision" && sandboxLoginToken(rc) != "" {
 			return sandboxBook(ctx, rc, client)
 		}
 		return &SandboxResult{Status: "not-found"}, nil
@@ -98,8 +104,12 @@ func sandboxGet(ctx context.Context, rc *runner.RunContext, action string) (*San
 
 	// Aligned with sandbox-api contract: use typed struct for safety.
 	var placement clients.SandboxPlacement
-	if resBytes, err := json.Marshal(placementMap); err == nil {
-		_ = json.Unmarshal(resBytes, &placement)
+	resBytes, err := json.Marshal(placementMap)
+	if err != nil {
+		return nil, fmt.Errorf("marshal placement map: %w", err)
+	}
+	if err := json.Unmarshal(resBytes, &placement); err != nil {
+		return nil, fmt.Errorf("unmarshal placement: %w", err)
 	}
 
 	// Check placement status using typed struct.
@@ -253,19 +263,10 @@ func sandboxBook(ctx context.Context, rc *runner.RunContext, client *clients.San
 	placement := response.Placement
 
 	switch statusCode {
-	case http.StatusOK:
-		// HTTP 200 is the idempotent success path.
-		dynamicVars := extractSandboxVars(pMap, true)
-		labels := extractSandboxLabels(pMap)
-		return &SandboxResult{
-			Status:      "success",
-			Placement:   pMap,
-			DynamicVars: dynamicVars,
-			Labels:      labels,
-		}, nil
-
-	case http.StatusAccepted:
-		// HTTP 202 is the asynchronous/rate-limited path.
+	case http.StatusOK, http.StatusAccepted:
+		// Both 200 (idempotent) and 202 (accepted) need body status validation.
+		// Although 200 is theoretically always success, an eventual-consistency
+		// race could return an existing placement in 'error' or 'queued' state.
 		switch placement.Status {
 		case "success", "complete":
 			dynamicVars := extractSandboxVars(pMap, true)
@@ -283,7 +284,9 @@ func sandboxBook(ctx context.Context, rc *runner.RunContext, client *clients.San
 		default:
 			// For any other status (like error or initializing), perform a follow-up 
 			// GET to propagate the result, matching Ansible's behavior.
-			return sandboxGet(ctx, rc, "provision")
+			// Call _sandboxGet with allowBook: false to prevent infinite recursion
+			// in case of an eventual-consistency race where GET returns 404.
+			return _sandboxGet(ctx, rc, "provision", false)
 		}
 
 	case 507:

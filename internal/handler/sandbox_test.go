@@ -988,7 +988,7 @@ func TestSandboxBook(t *testing.T) {
 		}
 	})
 
-	t.Run("status 200 - success with error status in body (idempotent)", func(t *testing.T) {
+	t.Run("status 200 - error status in body (idempotent check)", func(t *testing.T) {
 		sandboxServer := newSimpleSandboxServer(t, map[string]http.HandlerFunc{
 			"/api/v1/login": func(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(map[string]string{"access_token": "access-token"})
@@ -1018,8 +1018,8 @@ func TestSandboxBook(t *testing.T) {
 			t.Fatalf("sandboxBook() error = %v", err)
 		}
 
-		if result.Status != "success" {
-			t.Errorf("Status = %s, want 'success' for HTTP 200 (idempotent path)", result.Status)
+		if result.Status != "error" {
+			t.Errorf("Status = %s, want 'error' for HTTP 200 with error status in body", result.Status)
 		}
 	})
 
