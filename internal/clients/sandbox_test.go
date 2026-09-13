@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -532,52 +533,100 @@ func TestSandboxAPIBookPlacementUnexpectedStatus(t *testing.T) {
 	}
 }
 
-func TestSandboxAPIStartPlacement404FastFails(t *testing.T) {
-	attempts := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/api/v1/login" && r.Method == "GET":
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{"access_token": "test-token"})
-		case r.URL.Path == "/api/v1/placements/missing-uuid/start" && r.Method == "PUT":
-			attempts++
-			w.WriteHeader(http.StatusNotFound)
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	client := NewSandboxAPIClient(server.URL, "login-token",
-		func(c *SandboxAPIClient) {
-			c.retryDelays = []time.Duration{1 * time.Millisecond, 1 * time.Millisecond, 1 * time.Millisecond}
-			c.loginRetryDelays = nil
-		},
-	)
-	defer client.Close(context.Background())
-
-	_, status, err := client.StartPlacement(context.Background(), "missing-uuid")
-	if err == nil {
-		t.Fatal("expected error for 404, got nil")
+// TestSandboxAPIPlacementAction404FastFails verifies that a 404 on
+// start/stop fails immediately without consuming the retry budget, for both
+// actions and regardless of the response body shape. The JSON-body case
+// mirrors production (the sandbox API's LifeCyclePlacementHandler returns
+// `{"message":"No placement found"}`); the non-JSON-body case guards the
+// decode-error precedence — a 404 with a non-JSON body (e.g. a proxy error
+// page) must still report "placement not found", not a decode error.
+func TestSandboxAPIPlacementAction404FastFails(t *testing.T) {
+	tests := []struct {
+		name   string
+		action string // "start" or "stop"
+		body   string // response body the server returns with the 404
+	}{
+		{"start with json body", "start", `{"message":"No placement found"}`},
+		{"stop with json body", "stop", `{"message":"No placement found"}`},
+		{"start with non-json body", "start", "<html>502 Bad Gateway</html>"},
+		{"stop with non-json body", "stop", "<html>502 Bad Gateway</html>"},
 	}
-	if status != http.StatusNotFound {
-		t.Errorf("status = %d, want %d", status, http.StatusNotFound)
-	}
-	if attempts != 1 {
-		t.Errorf("attempts = %d, want 1 (404 must not retry)", attempts)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attempts := 0
+			actionPath := "/api/v1/placements/missing-uuid/" + tt.action
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == "/api/v1/login" && r.Method == "GET":
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(map[string]string{"access_token": "test-token"})
+				case r.URL.Path == actionPath && r.Method == "PUT":
+					attempts++
+					w.WriteHeader(http.StatusNotFound)
+					w.Write([]byte(tt.body))
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+
+			client := NewSandboxAPIClient(server.URL, "login-token",
+				func(c *SandboxAPIClient) {
+					c.retryDelays = []time.Duration{1 * time.Millisecond, 1 * time.Millisecond, 1 * time.Millisecond}
+					c.loginRetryDelays = nil
+				},
+			)
+			defer client.Close(context.Background())
+
+			var status int
+			var err error
+			if tt.action == "start" {
+				_, status, err = client.StartPlacement(context.Background(), "missing-uuid")
+			} else {
+				_, status, err = client.StopPlacement(context.Background(), "missing-uuid")
+			}
+
+			if err == nil {
+				t.Fatal("expected error for 404, got nil")
+			}
+			if !strings.Contains(err.Error(), "placement not found") {
+				t.Errorf("error = %q, want it to contain %q", err.Error(), "placement not found")
+			}
+			if status != http.StatusNotFound {
+				t.Errorf("status = %d, want %d", status, http.StatusNotFound)
+			}
+			if attempts != 1 {
+				t.Errorf("attempts = %d, want 1 (404 must not retry)", attempts)
+			}
+		})
 	}
 }
 
-func TestSandboxAPIStopPlacement404FastFails(t *testing.T) {
+// TestSandboxAPIPlacementAction409Retries pins the transient-409 contract: a
+// placement that is still queued returns 409, which must keep retrying (it
+// resolves once resources finish provisioning) and succeed on a later
+// attempt. This guards against a future change accidentally lumping 409 into
+// the 404 fast-fail branch.
+func TestSandboxAPIPlacementAction409Retries(t *testing.T) {
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api/v1/login" && r.Method == "GET":
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"access_token": "test-token"})
-		case r.URL.Path == "/api/v1/placements/missing-uuid/stop" && r.Method == "PUT":
+		case r.URL.Path == "/api/v1/placements/queued-uuid/start" && r.Method == "PUT":
 			attempts++
-			w.WriteHeader(http.StatusNotFound)
+			if attempts < 3 {
+				w.WriteHeader(http.StatusConflict)
+				w.Write([]byte(`{"message":"Cannot perform lifecycle actions on a placement that is still queued"}`))
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"request_id": "req-123",
+				"message":    "start request created",
+			})
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -592,15 +641,18 @@ func TestSandboxAPIStopPlacement404FastFails(t *testing.T) {
 	)
 	defer client.Close(context.Background())
 
-	_, status, err := client.StopPlacement(context.Background(), "missing-uuid")
-	if err == nil {
-		t.Fatal("expected error for 404, got nil")
+	result, status, err := client.StartPlacement(context.Background(), "queued-uuid")
+	if err != nil {
+		t.Fatalf("StartPlacement returned error after 409 retries: %v", err)
 	}
-	if status != http.StatusNotFound {
-		t.Errorf("status = %d, want %d", status, http.StatusNotFound)
+	if status != http.StatusAccepted {
+		t.Errorf("status = %d, want %d", status, http.StatusAccepted)
 	}
-	if attempts != 1 {
-		t.Errorf("attempts = %d, want 1 (404 must not retry)", attempts)
+	if result["request_id"] != "req-123" {
+		t.Errorf("request_id = %v, want req-123", result["request_id"])
+	}
+	if attempts != 3 {
+		t.Errorf("attempts = %d, want 3 (409 must retry until success)", attempts)
 	}
 }
 
