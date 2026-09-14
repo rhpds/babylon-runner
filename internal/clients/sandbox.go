@@ -273,11 +273,19 @@ func (c *SandboxAPIClient) GetRequestStatus(ctx context.Context, requestID strin
 
 // doPlacementAction performs a PUT request for placement start/stop
 // operations with retry and backoff. Transport errors and responses other
-// than 200/202 are retried; decode errors are terminal. 200 and 202 are the
-// acceptable statuses, matching the Ansible sandbox_api_{start,stop}.yaml
-// `status_code: [200, 202]` (the sandbox API replies 202 with a request_id
-// for async lifecycle jobs). The HTTP status of the final response is
-// returned so callers can record it in subject status.
+// than 200/202/404 are retried; decode errors and 404 are terminal. 200 and
+// 202 are the acceptable statuses, matching the Ansible
+// sandbox_api_{start,stop}.yaml `status_code: [200, 202]` (the sandbox API's
+// LifeCyclePlacementHandler replies 202 with a request_id for async
+// lifecycle jobs). A 404 means the placement is not found — it was never
+// created, or it existed and was deleted (the handler returns 404 only when
+// neither a placement nor active legacy accounts exist). Either way retrying
+// cannot make it reappear, so 404 fast-fails without consuming the retry
+// budget, matching the Ansible tasks' `until: ... or r.status == 404`
+// terminal condition. A 409 (placement still queued) is transient and keeps
+// retrying.
+// The HTTP status of the final response is returned so callers can record it
+// in subject status.
 func (c *SandboxAPIClient) doPlacementAction(ctx context.Context, actionURL string) (map[string]interface{}, int, error) {
 	headers, err := c.authHeaders(ctx)
 	if err != nil {
@@ -300,6 +308,15 @@ func (c *SandboxAPIClient) doPlacementAction(ctx context.Context, actionURL stri
 		var result map[string]interface{}
 		status, err := httputil.DoJSON(ctx, c.client, http.MethodPut, actionURL, headers, nil, &result)
 		lastStatus = status
+		if status == http.StatusNotFound {
+			// The placement is not found — retrying cannot help. Fast-fail to
+			// match the Ansible sandbox_api_{start,stop}.yaml
+			// `until: ... or r.status == 404` terminal condition. Checked
+			// before the decode-error branch so a 404 with a non-JSON body
+			// (e.g. a proxy error page) still reports "placement not found"
+			// rather than a misleading decode error.
+			return nil, status, fmt.Errorf("PUT %s: status %d (placement not found)", actionURL, status)
+		}
 		if err != nil {
 			if status >= 200 {
 				// Got a response but decode failed — terminal.
